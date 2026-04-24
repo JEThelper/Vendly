@@ -3,20 +3,28 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Vendor Control Panel API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
-    description: Health operations
+  - name: vendors
+  - name: menu
+  - name: orders
+  - name: conversations
+  - name: messages
+  - name: customers
+  - name: payments
+  - name: dashboard
+  - name: webhook
+  - name: simulator
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,13 +32,794 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Global dashboard summary across all vendors
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  /dashboard/activity:
+    get:
+      operationId: getRecentActivity
+      tags: [dashboard]
+      summary: Recent platform activity feed
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ActivityItem"
+
+  /vendors:
+    get:
+      operationId: listVendors
+      tags: [vendors]
+      summary: List all vendors
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Vendor"
+    post:
+      operationId: createVendor
+      tags: [vendors]
+      summary: Create a new vendor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVendorBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vendor"
+  /vendors/{vendorId}:
+    parameters:
+      - name: vendorId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getVendor
+      tags: [vendors]
+      summary: Get a single vendor with stats
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VendorDetail"
+    patch:
+      operationId: updateVendor
+      tags: [vendors]
+      summary: Update vendor info (plan, phone, name, bank)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVendorBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vendor"
+    delete:
+      operationId: deleteVendor
+      tags: [vendors]
+      summary: Delete a vendor
+      responses:
+        "204":
+          description: Deleted
+
+  /vendors/{vendorId}/menu:
+    parameters:
+      - name: vendorId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getVendorMenu
+      tags: [menu]
+      summary: List menu items for a vendor
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MenuItem"
+    post:
+      operationId: createMenuItem
+      tags: [menu]
+      summary: Create a menu item
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMenuItemBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MenuItem"
+  /menu/{itemId}:
+    parameters:
+      - name: itemId
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      operationId: updateMenuItem
+      tags: [menu]
+      summary: Update menu item
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMenuItemBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MenuItem"
+    delete:
+      operationId: deleteMenuItem
+      tags: [menu]
+      summary: Delete menu item
+      responses:
+        "204":
+          description: Deleted
+
+  /vendors/{vendorId}/orders:
+    parameters:
+      - name: vendorId
+        in: path
+        required: true
+        schema: { type: string }
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [pending, confirmed, paid, rejected, completed]
+    get:
+      operationId: listVendorOrders
+      tags: [orders]
+      summary: List orders for a vendor
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+  /orders/{orderId}:
+    parameters:
+      - name: orderId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getOrder
+      tags: [orders]
+      summary: Get order detail
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderDetail"
+    patch:
+      operationId: updateOrderStatus
+      tags: [orders]
+      summary: Confirm, reject, mark paid, or complete an order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrderBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  /vendors/{vendorId}/conversations:
+    parameters:
+      - name: vendorId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: listVendorConversations
+      tags: [conversations]
+      summary: List conversations for a vendor
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Conversation"
+
+  /conversations/{conversationId}:
+    parameters:
+      - name: conversationId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getConversation
+      tags: [conversations]
+      summary: Get a conversation with messages
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationDetail"
+    patch:
+      operationId: updateConversation
+      tags: [conversations]
+      summary: Toggle bot/human handover or close
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateConversationBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conversation"
+
+  /conversations/{conversationId}/messages:
+    parameters:
+      - name: conversationId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: sendMessage
+      tags: [messages]
+      summary: Send a message as the vendor (admin reply)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+
+  /vendors/{vendorId}/customers:
+    parameters:
+      - name: vendorId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: listVendorCustomers
+      tags: [customers]
+      summary: List customers for a vendor (memory)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Customer"
+
+  /vendors/{vendorId}/payments:
+    parameters:
+      - name: vendorId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: listVendorPayments
+      tags: [payments]
+      summary: List payments for a vendor
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Payment"
+
+  /vendors/{vendorId}/analytics:
+    parameters:
+      - name: vendorId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getVendorAnalytics
+      tags: [dashboard]
+      summary: Per-vendor analytics (Pro feature)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VendorAnalytics"
+
+  /webhook/whatsapp:
+    post:
+      operationId: whatsappWebhook
+      tags: [webhook]
+      summary: Inbound WhatsApp webhook (single endpoint, all vendors)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WhatsAppWebhookBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookResponse"
+
+  /simulator/incoming:
+    post:
+      operationId: simulateIncomingMessage
+      tags: [simulator]
+      summary: Simulate an inbound customer message (for testing without WhatsApp)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimulateIncomingBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookResponse"
+
 components:
   schemas:
     HealthStatus:
       type: object
+      required: [status]
       properties:
+        status: { type: string }
+
+    Plan:
+      type: string
+      enum: [starter, pro]
+
+    Vendor:
+      type: object
+      required: [id, name, phoneNumber, plan, botEnabled, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        phoneNumber: { type: string }
+        plan: { $ref: "#/components/schemas/Plan" }
+        botEnabled: { type: boolean }
+        bankName: { type: string, nullable: true }
+        bankAccountNumber: { type: string, nullable: true }
+        bankAccountHolder: { type: string, nullable: true }
+        currency: { type: string }
+        welcomeMessage: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    VendorDetail:
+      allOf:
+        - $ref: "#/components/schemas/Vendor"
+        - type: object
+          required: [stats]
+          properties:
+            stats:
+              $ref: "#/components/schemas/VendorStats"
+
+    VendorStats:
+      type: object
+      required:
+        - totalOrders
+        - pendingOrders
+        - confirmedOrders
+        - paidOrders
+        - revenue
+        - menuItems
+        - customers
+        - openConversations
+      properties:
+        totalOrders: { type: integer }
+        pendingOrders: { type: integer }
+        confirmedOrders: { type: integer }
+        paidOrders: { type: integer }
+        revenue: { type: number }
+        menuItems: { type: integer }
+        customers: { type: integer }
+        openConversations: { type: integer }
+
+    CreateVendorBody:
+      type: object
+      required: [name, phoneNumber, plan]
+      properties:
+        name: { type: string, minLength: 1 }
+        phoneNumber: { type: string, minLength: 4 }
+        plan: { $ref: "#/components/schemas/Plan" }
+        bankName: { type: string }
+        bankAccountNumber: { type: string }
+        bankAccountHolder: { type: string }
+        currency: { type: string }
+        welcomeMessage: { type: string }
+
+    UpdateVendorBody:
+      type: object
+      properties:
+        name: { type: string }
+        phoneNumber: { type: string }
+        plan: { $ref: "#/components/schemas/Plan" }
+        botEnabled: { type: boolean }
+        bankName: { type: string }
+        bankAccountNumber: { type: string }
+        bankAccountHolder: { type: string }
+        currency: { type: string }
+        welcomeMessage: { type: string }
+
+    MenuItem:
+      type: object
+      required: [id, vendorId, name, price, available, createdAt]
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        price: { type: number }
+        category: { type: string, nullable: true }
+        available: { type: boolean }
+        createdAt: { type: string, format: date-time }
+
+    CreateMenuItemBody:
+      type: object
+      required: [name, price]
+      properties:
+        name: { type: string, minLength: 1 }
+        description: { type: string }
+        price: { type: number, minimum: 0 }
+        category: { type: string }
+        available: { type: boolean }
+
+    UpdateMenuItemBody:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        price: { type: number, minimum: 0 }
+        category: { type: string }
+        available: { type: boolean }
+
+    OrderStatus:
+      type: string
+      enum: [pending, confirmed, paid, rejected, completed]
+
+    OrderItem:
+      type: object
+      required: [name, quantity, unitPrice]
+      properties:
+        name: { type: string }
+        quantity: { type: integer, minimum: 1 }
+        unitPrice: { type: number }
+
+    Order:
+      type: object
+      required:
+        - id
+        - vendorId
+        - customerPhone
+        - customerName
+        - status
+        - total
+        - items
+        - createdAt
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        vendorName: { type: string, nullable: true }
+        customerPhone: { type: string }
+        customerName: { type: string }
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        total: { type: number }
+        currency: { type: string }
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItem"
+        notes: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    OrderDetail:
+      allOf:
+        - $ref: "#/components/schemas/Order"
+
+    UpdateOrderBody:
+      type: object
+      required: [status]
+      properties:
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        note: { type: string }
+
+    ConversationStatus:
+      type: string
+      enum: [bot, human, closed]
+
+    Conversation:
+      type: object
+      required:
+        - id
+        - vendorId
+        - customerPhone
+        - customerName
+        - status
+        - lastMessagePreview
+        - lastMessageAt
+        - unreadCount
+        - createdAt
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        vendorName: { type: string, nullable: true }
+        customerPhone: { type: string }
+        customerName: { type: string }
+        status: { $ref: "#/components/schemas/ConversationStatus" }
+        lastMessagePreview: { type: string }
+        lastMessageAt: { type: string, format: date-time }
+        unreadCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+
+    Message:
+      type: object
+      required: [id, conversationId, direction, sender, body, createdAt]
+      properties:
+        id: { type: string }
+        conversationId: { type: string }
+        direction:
+          type: string
+          enum: [in, out]
+        sender:
+          type: string
+          enum: [customer, bot, vendor, system]
+        body: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    ConversationDetail:
+      allOf:
+        - $ref: "#/components/schemas/Conversation"
+        - type: object
+          required: [messages]
+          properties:
+            messages:
+              type: array
+              items:
+                $ref: "#/components/schemas/Message"
+
+    UpdateConversationBody:
+      type: object
+      properties:
+        status: { $ref: "#/components/schemas/ConversationStatus" }
+        markRead: { type: boolean }
+
+    SendMessageBody:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1 }
+        sender:
+          type: string
+          enum: [vendor, system]
+
+    Customer:
+      type: object
+      required:
+        - id
+        - vendorId
+        - phone
+        - name
+        - totalOrders
+        - totalSpent
+        - createdAt
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        phone: { type: string }
+        name: { type: string }
+        notes: { type: string, nullable: true }
+        totalOrders: { type: integer }
+        totalSpent: { type: number }
+        lastSeenAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    Payment:
+      type: object
+      required: [id, vendorId, orderId, amount, method, status, createdAt]
+      properties:
+        id: { type: string }
+        vendorId: { type: string }
+        orderId: { type: string }
+        customerName: { type: string }
+        amount: { type: number }
+        currency: { type: string }
+        method:
+          type: string
+          enum: [bank_transfer, payment_link, cash]
         status:
           type: string
-      required:
-        - status
+          enum: [pending, confirmed, failed]
+        reference: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
 
+    DashboardSummary:
+      type: object
+      required:
+        - totalVendors
+        - starterVendors
+        - proVendors
+        - totalOrders
+        - pendingOrders
+        - revenue
+        - openConversations
+        - messagesToday
+        - ordersByStatus
+        - revenueByVendor
+      properties:
+        totalVendors: { type: integer }
+        starterVendors: { type: integer }
+        proVendors: { type: integer }
+        totalOrders: { type: integer }
+        pendingOrders: { type: integer }
+        revenue: { type: number }
+        openConversations: { type: integer }
+        messagesToday: { type: integer }
+        ordersByStatus:
+          type: array
+          items:
+            type: object
+            required: [status, count]
+            properties:
+              status: { $ref: "#/components/schemas/OrderStatus" }
+              count: { type: integer }
+        revenueByVendor:
+          type: array
+          items:
+            type: object
+            required: [vendorId, vendorName, revenue]
+            properties:
+              vendorId: { type: string }
+              vendorName: { type: string }
+              revenue: { type: number }
+
+    ActivityItem:
+      type: object
+      required: [id, type, description, vendorName, createdAt]
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          enum: [order, message, payment, vendor, handover]
+        description: { type: string }
+        vendorName: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    VendorAnalytics:
+      type: object
+      required:
+        - dailyOrders
+        - dailyRevenue
+        - topItems
+        - repeatCustomerRate
+      properties:
+        dailyOrders:
+          type: array
+          items:
+            type: object
+            required: [date, count]
+            properties:
+              date: { type: string }
+              count: { type: integer }
+        dailyRevenue:
+          type: array
+          items:
+            type: object
+            required: [date, amount]
+            properties:
+              date: { type: string }
+              amount: { type: number }
+        topItems:
+          type: array
+          items:
+            type: object
+            required: [name, quantity, revenue]
+            properties:
+              name: { type: string }
+              quantity: { type: integer }
+              revenue: { type: number }
+        repeatCustomerRate: { type: number }
+
+    WhatsAppWebhookBody:
+      type: object
+      required: [from, to, body]
+      properties:
+        from: { type: string, description: "Customer phone number" }
+        to: { type: string, description: "Vendor WhatsApp number" }
+        body: { type: string }
+        profileName: { type: string }
+
+    SimulateIncomingBody:
+      type: object
+      required: [vendorId, customerPhone, body]
+      properties:
+        vendorId: { type: string }
+        customerPhone: { type: string }
+        customerName: { type: string }
+        body: { type: string }
+
+    WebhookResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        botReply: { type: string, nullable: true }
+        conversationId: { type: string, nullable: true }
