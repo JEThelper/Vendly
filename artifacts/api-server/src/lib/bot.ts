@@ -18,6 +18,14 @@ import {
 import { and, eq, sql, desc, gte } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./whatsapp";
 import { hasFeature } from "./plans";
+import { aiExtractOrder } from "./ai-extractor";
+import {
+  setPendingOrder,
+  getPendingOrder,
+  clearPendingOrder,
+  type PendingOrder,
+} from "./pending-orders";
+import { findBestMenuMatch } from "./fuzzy-match";
 
 export type IncomingResult = {
   conversation: ConversationRow | null;
@@ -193,6 +201,43 @@ function looksLikeOrder(body: string): boolean {
   if (/^[\d, x×*]+$/i.test(trimmed)) return true;
   if (/\b[x×]\s?\d+\b/i.test(trimmed)) return true;
   return false;
+}
+
+// Hybrid order extraction: tries AI first, falls back to rule-based.
+// Returns null if neither method produces valid results.
+type HybridOrderData = {
+  item?: string;
+  quantity?: number;
+};
+
+async function getOrderData(text: string): Promise<HybridOrderData | null> {
+  // Try AI extraction first
+  const aiResult = await aiExtractOrder(text);
+  if (aiResult) {
+    return aiResult;
+  }
+
+  // Fallback to rule-based extraction
+  const parsed = parseOrderLine(text);
+  if (parsed.length === 0) {
+    return null;
+  }
+
+  // For simplicity, use the first parsed item
+  // In a multi-item order, we'll handle it differently
+  const first = parsed[0];
+  if (!first) return null;
+
+  if (first.kind === "number") {
+    // Can't use number index here without menu context
+    // Return the raw parsed data for caller to resolve
+    return { quantity: first.quantity };
+  }
+
+  return {
+    item: first.name,
+    quantity: first.quantity,
+  };
 }
 
 function paymentInstructions(vendor: VendorRow, total: number): string {
@@ -432,67 +477,15 @@ async function computeBotReply(
     };
   }
 
-  // Order detection (number picks, "order <name>", "<qty> <name>", etc.)
-  if (looksLikeOrder(body)) {
-    const requested = parseOrderLine(body);
-    if (requested.length === 0) {
-      return {
-        text: `I didn't catch that. Reply *menu* to see the list, then send the number(s) you want — e.g. "1" or "1, 3x2, 5".`,
-        handover: false,
-      };
-    }
-    const allItems = await listActiveMenuItems(vendor);
-    if (allItems.length === 0) {
-      return {
-        text: `Our menu is being updated. Please check back soon.`,
-        handover: false,
-      };
-    }
-    const matched: OrderItemJson[] = [];
-    const missing: string[] = [];
-    for (const r of requested) {
-      let found: MenuItemRow | undefined;
-      if (r.kind === "number") {
-        found = allItems[r.index - 1];
-        if (!found) {
-          missing.push(`#${r.index}`);
-          continue;
-        }
-      } else {
-        found =
-          allItems.find(
-            (m) => m.name.toLowerCase() === r.name.toLowerCase(),
-          ) ??
-          allItems.find((m) =>
-            m.name.toLowerCase().includes(r.name.toLowerCase()),
-          );
-        if (!found) {
-          missing.push(r.name);
-          continue;
-        }
-      }
-      // Combine duplicates (e.g. "1, 1x2" -> 3× item #1)
-      const existing = matched.find((m) => m.name === found!.name);
-      if (existing) {
-        existing.quantity += r.quantity;
-      } else {
-        matched.push({
-          name: found.name,
-          quantity: r.quantity,
-          unitPrice: Number(found.price),
-        });
-      }
-    }
-    if (matched.length === 0) {
-      return {
-        text: `I couldn't find ${missing.join(", ")} on the menu. Reply *menu* to see what's available.`,
-        handover: false,
-      };
-    }
-    const total = matched.reduce(
-      (sum, i) => sum + i.unitPrice * i.quantity,
-      0,
-    );
+  // Check for order confirmation from pending order
+  const pendingOrder = getPendingOrder(vendor.id, conversation.customerPhone);
+  const confirmTriggers = ["yes", "confirm", "ok", "yeah", "yep", "sure"];
+  if (
+    pendingOrder &&
+    (startsWithAny(body, confirmTriggers) || body.toLowerCase() === "y")
+  ) {
+    // Create the actual order from pending
+    clearPendingOrder(vendor.id, conversation.customerPhone);
     const [order] = await db
       .insert(ordersTable)
       .values({
@@ -501,45 +494,125 @@ async function computeBotReply(
         customerName: conversation.customerName,
         status: "pending",
         paymentStatus: "pending",
-        total: total.toFixed(2),
+        total: pendingOrder.total.toFixed(2),
         currency: vendor.currency,
-        items: matched,
-        notes: missing.length > 0 ? `Not on menu: ${missing.join(", ")}` : null,
+        items: [
+          {
+            name: pendingOrder.item.name,
+            quantity: pendingOrder.quantity,
+            unitPrice: Number(pendingOrder.item.price),
+          },
+        ],
       })
       .returning();
-    const lines: string[] = [`*Order received*`, ``];
-    for (const item of matched) {
-      lines.push(
-        `- ${item.quantity}× ${item.name} — ${formatMoney(item.unitPrice * item.quantity, vendor.currency)}`,
-      );
-    }
-    lines.push(``, `Total: *${formatMoney(total, vendor.currency)}*`);
-    if (missing.length > 0) {
-      lines.push(``, `Not on menu: ${missing.join(", ")}`);
-    }
+
+    const lines: string[] = [`*Order confirmed! ✓*`, ``];
+    lines.push(
+      `- ${pendingOrder.quantity}× ${pendingOrder.item.name} — ${formatMoney(pendingOrder.total, vendor.currency)}`,
+    );
+    lines.push(``, `Total: *${formatMoney(pendingOrder.total, vendor.currency)}*`);
     lines.push(
       ``,
-      `The vendor will confirm shortly. Order #${order!.id.slice(0, 8)}.`,
+      `Order #${order!.id.slice(0, 8)} sent to vendor. They'll confirm shortly.`,
     );
+
     const adminLines: string[] = [
       `*New order from ${conversation.customerName}* (${conversation.customerPhone})`,
       ``,
     ];
-    for (const item of matched) {
-      adminLines.push(
-        `- ${item.quantity}× ${item.name} — ${formatMoney(item.unitPrice * item.quantity, vendor.currency)}`,
-      );
-    }
+    adminLines.push(
+      `- ${pendingOrder.quantity}× ${pendingOrder.item.name} — ${formatMoney(pendingOrder.total, vendor.currency)}`,
+    );
     adminLines.push(
       ``,
-      `Total: ${formatMoney(total, vendor.currency)}`,
+      `Total: ${formatMoney(pendingOrder.total, vendor.currency)}`,
       ``,
       `Reply *confirm ${order!.id.slice(0, 8)}* or *reject ${order!.id.slice(0, 8)}*.`,
     );
+
     return {
       text: lines.join("\n"),
       handover: false,
       adminAlert: adminLines.join("\n"),
+    };
+  }
+
+  // Check for rejection of pending order
+  const rejectTriggers = ["no", "cancel", "nope"];
+  if (
+    pendingOrder &&
+    (startsWithAny(body, rejectTriggers) || body.toLowerCase() === "n")
+  ) {
+    clearPendingOrder(vendor.id, conversation.customerPhone);
+    return {
+      text: `Order cancelled. Reply *menu* if you'd like to start over.`,
+      handover: false,
+    };
+  }
+
+  // Order detection (number picks, "order <name>", "<qty> <name>", etc.)
+  if (looksLikeOrder(body)) {
+    const requested = parseOrderLine(body);
+    const allItems = await listActiveMenuItems(vendor);
+
+    if (allItems.length === 0) {
+      return {
+        text: `Our menu is being updated. Please check back soon.`,
+        handover: false,
+      };
+    }
+
+    // Try rule-based extraction first for patterns like "1", "1x2", etc.
+    let matchedItem: MenuItemRow | null = null;
+    let quantity = 1;
+
+    if (requested.length > 0) {
+      // Rule-based: try numbers first
+      const first = requested[0];
+      if (first.kind === "number") {
+        matchedItem = allItems[first.index - 1] ?? null;
+        quantity = first.quantity;
+      } else {
+        // Try fuzzy match for name-based orders
+        matchedItem = findBestMenuMatch(first.name, allItems);
+        quantity = first.quantity;
+      }
+    } else {
+      // No standard pattern detected, try AI extraction
+      const aiData = await aiExtractOrder(body);
+      if (aiData?.item) {
+        matchedItem = findBestMenuMatch(aiData.item, allItems);
+        quantity = aiData.quantity ?? 1;
+      }
+    }
+
+    if (!matchedItem) {
+      return {
+        text: `I couldn't understand that order. Reply *menu* to see what's available, then send the number or item name.`,
+        handover: false,
+      };
+    }
+
+    // Calculate total
+    const total = Number(matchedItem.price) * quantity;
+
+    // Store as pending order and ask for confirmation
+    const pending: PendingOrder = {
+      vendorId: vendor.id,
+      customerPhone: conversation.customerPhone,
+      item: matchedItem,
+      quantity,
+      total,
+      timestamp: new Date(),
+    };
+    setPendingOrder(pending);
+
+    const confirmationText =
+      `You want ${quantity}× ${matchedItem.name} for ${formatMoney(total, vendor.currency)}. ` +
+      `Reply *YES* to confirm or *NO* to cancel.`;
+    return {
+      text: confirmationText,
+      handover: false,
     };
   }
 

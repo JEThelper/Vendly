@@ -37,10 +37,10 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{summary.totalVendors}</div>
+            <div className="text-2xl font-bold">{summary.totalVendors ?? 0}</div>
             <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>{summary.proVendors} Pro</span>
-              <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-primary"></span>{summary.starterVendors} Starter</span>
+              <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>{summary.proVendors ?? 0} Pro</span>
+              <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-primary"></span>{summary.starterVendors ?? 0} Starter</span>
             </div>
           </CardContent>
         </Card>
@@ -53,9 +53,9 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{summary.totalOrders}</div>
+            <div className="text-2xl font-bold">{summary.totalOrders ?? 0}</div>
             <p className="text-xs text-muted-foreground mt-1">
-              {summary.pendingOrders} pending
+              {summary.pendingOrders ?? 0} pending
             </p>
           </CardContent>
         </Card>
@@ -97,7 +97,7 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="h-[300px] w-full">
-              {summary.revenueByVendor.length > 0 ? (
+              {summary.revenueByVendor && summary.revenueByVendor.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={summary.revenueByVendor} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <XAxis dataKey="vendorName" fontSize={12} tickLine={false} axisLine={false} />
@@ -136,7 +136,7 @@ export default function Dashboard() {
               <div className="space-y-4">
                 {[1,2,3,4].map(i => <div key={i} className="h-10 bg-muted animate-pulse rounded"></div>)}
               </div>
-            ) : activity && activity.length > 0 ? (
+            ) : Array.isArray(activity) && activity.length > 0 ? (
               <div className="space-y-4">
                 {activity.map((item) => (
                   <div key={item.id} className="flex gap-3 text-sm">

@@ -10,7 +10,83 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Production-grade connection pool configuration
+// These settings prevent connection exhaustion under load
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  
+  // Connection pooling settings
+  max: parseInt(process.env.DB_POOL_SIZE || "20", 10),          // Max connections
+  min: parseInt(process.env.DB_POOL_MIN || "5", 10),             // Min idle connections
+  idleTimeoutMillis: 30000,      // Close idle connections after 30s
+  connectionTimeoutMillis: 5000, // Timeout for acquiring a connection
+  
+  // Retry settings for connection failures
+  maxUses: 0,                    // No limit on reuses (0 = unlimited)
+});
+
+// Log connection pool events in production
+if (process.env.NODE_ENV === "production") {
+  pool.on("error", (err) => {
+    console.error("[POOL ERROR]", err);
+  });
+
+  pool.on("connect", () => {
+    console.debug("[POOL] New connection created");
+  });
+
+  pool.on("remove", () => {
+    console.debug("[POOL] Connection removed");
+  });
+}
+
 export const db = drizzle(pool, { schema });
+
+/**
+ * Health check for database connectivity
+ * Use this to verify the database is responsive
+ */
+export async function checkDatabaseHealth(): Promise<{
+  ok: boolean;
+  poolSize: number;
+  idleCount: number;
+  waitingCount: number;
+  responseTime: number;
+}> {
+  const startTime = Date.now();
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query("SELECT 1");
+    } finally {
+      client.release();
+    }
+
+    return {
+      ok: true,
+      poolSize: pool.totalCount,
+      idleCount: pool.idleCount,
+      waitingCount: pool.waitingCount,
+      responseTime: Date.now() - startTime,
+    };
+  } catch (err) {
+    console.error("[DB HEALTH CHECK] Failed:", err);
+    return {
+      ok: false,
+      poolSize: pool.totalCount,
+      idleCount: pool.idleCount,
+      waitingCount: pool.waitingCount,
+      responseTime: Date.now() - startTime,
+    };
+  }
+}
+
+/**
+ * Close database connections (call on graceful shutdown)
+ */
+export async function closeDatabase(): Promise<void> {
+  await pool.end();
+  console.log("[DB] Connection pool closed");
+}
 
 export * from "./schema";
