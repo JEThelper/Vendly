@@ -7,6 +7,9 @@ import {
   SimulateIncomingMessageBody,
 } from "@workspace/api-zod";
 import { handleIncomingMessage } from "../lib/bot";
+import { queueIncomingMessage } from "../lib/queue";
+import { logger } from "../lib/logger";
+import { shouldRateLimitCustomer } from "../lib/rate-limiter";
 
 const router: IRouter = Router();
 
@@ -72,7 +75,7 @@ router.post("/webhook/messages", async (req, res) => {
           .limit(1);
 
         if (!vendor) {
-          req.log.warn(
+          logger.warn(
             { phoneNumberId },
             "Inbound webhook: no vendor for phone_number_id",
           );
@@ -84,17 +87,37 @@ router.post("/webhook/messages", async (req, res) => {
           const profileName =
             v.contacts?.find((c) => c.wa_id === msg.from)?.profile?.name ??
             msg.from;
-          await handleIncomingMessage({
-            vendor,
-            fromPhone: msg.from,
-            fromName: profileName,
-            body: msg.text.body,
-          });
+          
+          // CRITICAL: Check rate limit BEFORE queueing
+          // This prevents spam from filling up the queue
+          if (shouldRateLimitCustomer(msg.from)) {
+            logger.warn(
+              { phone: msg.from, vendorId: vendor.id },
+              "Rate limited: ignoring spam customer",
+            );
+            continue;
+          }
+          
+          // PRODUCTION CHANGE: Queue the message instead of processing immediately
+          // This prevents request pile-up during traffic spikes
+          try {
+            await queueIncomingMessage(
+              vendor.id,
+              msg.from,
+              profileName,
+              msg.text.body,
+            );
+          } catch (err) {
+            logger.error(
+              { err, phone: msg.from, vendorId: vendor.id },
+              "Failed to queue incoming message",
+            );
+          }
         }
       }
     }
   } catch (err) {
-    req.log.error({ err }, "Webhook processing failed");
+    logger.error({ err }, "Webhook processing failed");
   }
 });
 

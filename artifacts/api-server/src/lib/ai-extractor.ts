@@ -136,7 +136,12 @@ export async function aiExtractOrder(text: string): Promise<ExtractedOrder | nul
 
     return { item, quantity };
   } catch (err) {
-    logger.warn({ err }, "AI extraction failed, will fallback to rule-based");
+    // Check if it's a timeout error
+    if (err instanceof Error && err.message.includes("timeout")) {
+      logger.warn({ text: text.slice(0, 100) }, "AI extraction timeout, using rule-based fallback");
+    } else {
+      logger.warn({ err }, "AI extraction failed, will fallback to rule-based");
+    }
     return null;
   }
 }

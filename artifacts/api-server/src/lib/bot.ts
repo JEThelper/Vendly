@@ -14,9 +14,11 @@ import {
   paymentsTable,
   promotionsTable,
   broadcastsTable,
+  pendingOrdersTable,
 } from "@workspace/db";
-import { and, eq, sql, desc, gte } from "drizzle-orm";
+import { and, eq, sql, desc, gte, limit } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./whatsapp";
+import { logger } from "./logger";
 import { hasFeature } from "./plans";
 import { aiExtractOrder } from "./ai-extractor";
 import {
@@ -26,6 +28,8 @@ import {
   type PendingOrder,
 } from "./pending-orders";
 import { findBestMenuMatch } from "./fuzzy-match";
+import { shouldRateLimitCustomer, shouldRateLimitAdminCommand } from "./rate-limiter";
+import { queueOutboundMessage } from "./queue";
 
 export type IncomingResult = {
   conversation: ConversationRow | null;
@@ -335,15 +339,38 @@ export async function handleIncomingMessage(args: {
 }): Promise<IncomingResult> {
   const { vendor, fromPhone, fromName, body } = args;
 
+  // Rate limit: prevent customer spam
+  if (shouldRateLimitCustomer(fromPhone)) {
+    logger.warn({ phone: fromPhone }, "Customer rate limited");
+    return {
+      conversation: null,
+      botReply: null,
+      adminNotification: null,
+      isAdmin: false,
+    };
+  }
+
   // Admin (vendor's personal number) -> admin command flow.
   if (isAdminSender(vendor, fromPhone)) {
+    // Admin rate limiting
+    if (shouldRateLimitAdminCommand(vendor.id)) {
+      logger.warn({ vendorId: vendor.id }, "Admin command rate limited");
+      return {
+        conversation: null,
+        botReply: null,
+        adminNotification: null,
+        isAdmin: true,
+      };
+    }
+
     const reply = await handleAdminCommand(vendor, body);
     if (reply.text) {
-      await sendWhatsAppMessage({
-        phoneNumberId: vendor.phoneNumberId,
-        to: fromPhone,
-        text: reply.text,
-      });
+      // Queue the message instead of sending immediately
+      await queueOutboundMessage(
+        vendor.phoneNumberId,
+        fromPhone,
+        reply.text,
+      );
     }
     return {
       conversation: null,
@@ -387,11 +414,12 @@ export async function handleIncomingMessage(args: {
 
   if (reply.text) {
     await recordMessage(conversation.id, "out", "bot", reply.text);
-    await sendWhatsAppMessage({
-      phoneNumberId: vendor.phoneNumberId,
-      to: fromPhone,
-      text: reply.text,
-    });
+    // Queue message for reliable delivery
+    await queueOutboundMessage(
+      vendor.phoneNumberId,
+      fromPhone,
+      reply.text,
+    );
   }
 
   // Notify the vendor's admin number when a new order was just placed,
@@ -399,11 +427,12 @@ export async function handleIncomingMessage(args: {
   let adminNotification: string | null = null;
   if (reply.adminAlert && vendor.adminNumber) {
     adminNotification = reply.adminAlert;
-    await sendWhatsAppMessage({
-      phoneNumberId: vendor.phoneNumberId,
-      to: vendor.adminNumber,
-      text: reply.adminAlert,
-    });
+    // Queue admin notification as well
+    await queueOutboundMessage(
+      vendor.phoneNumberId,
+      vendor.adminNumber,
+      reply.adminAlert,
+    );
   }
 
   return {
@@ -478,14 +507,14 @@ async function computeBotReply(
   }
 
   // Check for order confirmation from pending order
-  const pendingOrder = getPendingOrder(vendor.id, conversation.customerPhone);
+  const pendingOrder = await getPendingOrder(vendor.id, conversation.customerPhone);
   const confirmTriggers = ["yes", "confirm", "ok", "yeah", "yep", "sure"];
   if (
     pendingOrder &&
     (startsWithAny(body, confirmTriggers) || body.toLowerCase() === "y")
   ) {
     // Create the actual order from pending
-    clearPendingOrder(vendor.id, conversation.customerPhone);
+    await clearPendingOrder(vendor.id, conversation.customerPhone);
     const [order] = await db
       .insert(ordersTable)
       .values({
@@ -543,7 +572,7 @@ async function computeBotReply(
     pendingOrder &&
     (startsWithAny(body, rejectTriggers) || body.toLowerCase() === "n")
   ) {
-    clearPendingOrder(vendor.id, conversation.customerPhone);
+    await clearPendingOrder(vendor.id, conversation.customerPhone);
     return {
       text: `Order cancelled. Reply *menu* if you'd like to start over.`,
       handover: false,
@@ -597,15 +626,20 @@ async function computeBotReply(
     const total = Number(matchedItem.price) * quantity;
 
     // Store as pending order and ask for confirmation
-    const pending: PendingOrder = {
-      vendorId: vendor.id,
-      customerPhone: conversation.customerPhone,
-      item: matchedItem,
+    const pending = await setPendingOrder(
+      vendor.id,
+      conversation.customerPhone,
+      matchedItem,
       quantity,
       total,
-      timestamp: new Date(),
-    };
-    setPendingOrder(pending);
+    );
+
+    if (!pending) {
+      return {
+        text: `Sorry, I encountered an error processing your order. Please try again.`,
+        handover: false,
+      };
+    }
 
     const confirmationText =
       `You want ${quantity}× ${matchedItem.name} for ${formatMoney(total, vendor.currency)}. ` +
@@ -783,20 +817,33 @@ export async function handleAdminCommand(
           gte(customersTable.lastSeenAt, since),
         ),
       );
-    for (const r of recipients) {
-      await sendWhatsAppMessage({
-        phoneNumberId: vendor.phoneNumberId,
-        to: r.phone,
-        text: message,
-      });
+
+    // Queue messages in batches (50 per batch) instead of sequential
+    // This prevents rate limiting and server overload
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+      const batch = recipients.slice(i, i + BATCH_SIZE);
+      for (const r of batch) {
+        // Queue each message with moderate priority
+        await queueOutboundMessage(
+          vendor.phoneNumberId,
+          r.phone,
+          message,
+        );
+      }
+      // Add delay between batches to avoid overwhelming the queue
+      if (i + BATCH_SIZE < recipients.length) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
     }
+
     await db.insert(broadcastsTable).values({
       vendorId: vendor.id,
       message,
       recipientCount: recipients.length,
     });
     return {
-      text: `Broadcast sent to ${recipients.length} customer${recipients.length === 1 ? "" : "s"} (active in the last 30 days).`,
+      text: `Broadcast queued for ${recipients.length} customer${recipients.length === 1 ? "" : "s"} (active in the last 30 days). Messages will be delivered shortly.`,
     };
   }
 
@@ -898,14 +945,14 @@ export async function handleAdminCommand(
           `Hi ${t.name}, this is a reminder about your order #${t.shortId} ` +
           `at ${vendor.name} (total ${vendor.currency} ${Number(t.total).toFixed(2)}). ` +
           `Reply *paid* once you've completed payment, or *agent* if you need help.`;
-        await sendWhatsAppMessage({
-          phoneNumberId: vendor.phoneNumberId,
-          to: t.phone,
+        await queueOutboundMessage(
+          vendor.phoneNumberId,
+          t.phone,
           text,
-        });
+        );
       }
       return {
-        text: `Sent reminders to ${targets.length} customer${targets.length === 1 ? "" : "s"} with stalled orders.`,
+        text: `Queued reminders to ${targets.length} customer${targets.length === 1 ? "" : "s"} with stalled orders.`,
       };
     }
     return {
