@@ -1,0 +1,39 @@
+(node:10213) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:10213) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+[21:33:22.162] [32mINFO[39m (10213): [36mInitializing production systems...[39m
+[21:33:22.174] [32mINFO[39m (10213): [36mServer listening[39m
+    [35mport[39m: 3000
+[DB HEALTH CHECK] Failed: AggregateError [ECONNREFUSED]: 
+    at <anonymous> (/workspaces/Automation-Bot/Vendor-Connect-Hub/node_modules/.pnpm/pg-pool@3.13.0_pg@8.20.0/node_modules/pg-pool/index.js:45:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async checkDatabaseHealth (/workspaces/Automation-Bot/Vendor-Connect-Hub/lib/db/src/index.ts:61:20)
+    at async initializeProduction (/workspaces/Automation-Bot/Vendor-Connect-Hub/artifacts/api-server/src/index.ts:41:22) {
+  code: 'ECONNREFUSED',
+  [errors]: [
+    Error: connect ECONNREFUSED ::1:5432
+        at createConnectionError (node:net:1686:14)
+        at afterConnectMultiple (node:net:1716:16) {
+      errno: -111,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '::1',
+      port: 5432
+    },
+    Error: connect ECONNREFUSED 127.0.0.1:5432
+        at createConnectionError (node:net:1686:14)
+        at afterConnectMultiple (node:net:1716:16) {
+      errno: -111,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '127.0.0.1',
+      port: 5432
+    }
+  ]
+}
+[21:33:22.295] [31mERROR[39m (10213): [36mDatabase health check failed[39m
+    [35mok[39m: false
+    [35mpoolSize[39m: 0
+    [35midleCount[39m: 0
+    [35mwaitingCount[39m: 0
+    [35mresponseTime[39m: 133
