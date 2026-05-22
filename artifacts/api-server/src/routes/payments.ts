@@ -15,7 +15,7 @@ router.get("/vendors/:vendorId/payments", async (req, res) => {
     .from(paymentsTable)
     .where(eq(paymentsTable.vendorId, params.data.vendorId))
     .orderBy(desc(paymentsTable.createdAt));
-  res.json(rows.map(toPayment));
+  return res.json(rows.map(toPayment));
 });
 
 export default router;

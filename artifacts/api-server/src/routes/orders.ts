@@ -35,7 +35,7 @@ router.get("/vendors/:vendorId/orders", async (req, res) => {
     .from(ordersTable)
     .where(and(...conditions))
     .orderBy(desc(ordersTable.createdAt));
-  res.json(rows.map((r) => toOrder(r)));
+  return res.json(rows.map((r) => toOrder(r)));
 });
 
 router.get("/orders/:orderId", async (req, res) => {
@@ -47,7 +47,7 @@ router.get("/orders/:orderId", async (req, res) => {
     .where(eq(ordersTable.id, params.data.orderId))
     .limit(1);
   if (!order) return res.status(404).json({ error: "not_found" });
-  res.json(toOrder(order));
+  return res.json(toOrder(order));
 });
 
 router.patch("/orders/:orderId", async (req, res) => {
@@ -146,7 +146,7 @@ router.patch("/orders/:orderId", async (req, res) => {
     }
   }
 
-  res.json(toOrder(updated));
+  return res.json(toOrder(updated));
 });
 
 export default router;

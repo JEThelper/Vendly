@@ -29,7 +29,7 @@ router.get("/vendors/:vendorId/broadcasts", async (req, res) => {
     .where(eq(broadcastsTable.vendorId, params.data.vendorId))
     .orderBy(desc(broadcastsTable.sentAt))
     .limit(50);
-  res.json(rows.map(toBroadcast));
+  return res.json(rows.map(toBroadcast));
 });
 
 router.post("/vendors/:vendorId/broadcasts", async (req, res) => {
@@ -81,7 +81,7 @@ router.post("/vendors/:vendorId/broadcasts", async (req, res) => {
       recipientCount: recipients.length,
     })
     .returning();
-  res.status(201).json(toBroadcast(created!));
+  return res.status(201).json(toBroadcast(created!));
 });
 
 // Find customers with confirmed-but-unpaid orders > 24h old, send a polite
@@ -173,7 +173,7 @@ router.post("/vendors/:vendorId/follow-ups/run", async (req, res) => {
     broadcastId = b!.id;
   }
 
-  res.json({ reminded: targets.length, broadcastId });
+  return res.json({ reminded: targets.length, broadcastId });
 });
 
 export default router;

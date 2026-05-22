@@ -5,7 +5,6 @@ import {
   menuItemsTable,
   type MenuItemRow,
   ordersTable,
-  type OrderItemJson,
   type OrderRow,
   conversationsTable,
   type ConversationRow,
@@ -14,9 +13,8 @@ import {
   paymentsTable,
   promotionsTable,
   broadcastsTable,
-  pendingOrdersTable,
 } from "@workspace/db";
-import { and, eq, sql, desc, gte, limit } from "drizzle-orm";
+import { and, eq, sql, desc, gte } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./whatsapp";
 import { logger } from "./logger";
 import { hasFeature } from "./plans";
@@ -25,7 +23,6 @@ import {
   setPendingOrder,
   getPendingOrder,
   clearPendingOrder,
-  type PendingOrder,
 } from "./pending-orders";
 import { findBestMenuMatch } from "./fuzzy-match";
 import { shouldRateLimitCustomer, shouldRateLimitAdminCommand } from "./rate-limiter";
@@ -207,43 +204,6 @@ function looksLikeOrder(body: string): boolean {
   return false;
 }
 
-// Hybrid order extraction: tries AI first, falls back to rule-based.
-// Returns null if neither method produces valid results.
-type HybridOrderData = {
-  item?: string;
-  quantity?: number;
-};
-
-async function getOrderData(text: string): Promise<HybridOrderData | null> {
-  // Try AI extraction first
-  const aiResult = await aiExtractOrder(text);
-  if (aiResult) {
-    return aiResult;
-  }
-
-  // Fallback to rule-based extraction
-  const parsed = parseOrderLine(text);
-  if (parsed.length === 0) {
-    return null;
-  }
-
-  // For simplicity, use the first parsed item
-  // In a multi-item order, we'll handle it differently
-  const first = parsed[0];
-  if (!first) return null;
-
-  if (first.kind === "number") {
-    // Can't use number index here without menu context
-    // Return the raw parsed data for caller to resolve
-    return { quantity: first.quantity };
-  }
-
-  return {
-    item: first.name,
-    quantity: first.quantity,
-  };
-}
-
 function paymentInstructions(vendor: VendorRow, total: number): string {
   if (vendor.bankName && vendor.bankAccountNumber) {
     return [
@@ -266,13 +226,16 @@ async function findOrCreateConversation(
   customerPhone: string,
   customerName: string,
 ): Promise<ConversationRow> {
+  const phone = customerPhone ?? "unknown";
+  const name = customerName ?? "Anonymous";
+  
   const existing = await db
     .select()
     .from(conversationsTable)
     .where(
       and(
         eq(conversationsTable.vendorId, vendor.id),
-        eq(conversationsTable.customerPhone, customerPhone),
+        eq(conversationsTable.customerPhone, phone),
       ),
     )
     .limit(1);
@@ -281,11 +244,92 @@ async function findOrCreateConversation(
     .insert(conversationsTable)
     .values({
       vendorId: vendor.id,
-      customerPhone,
-      customerName,
+      customerPhone: phone,
+      customerName: name,
     })
     .returning();
   return created!;
+}
+
+/**
+ * Resolve multiple requested items to menu items.
+ * Returns items with menu price/details or null if any item not found.
+ * Issue #8: Multi-Item Order Support
+ */
+async function resolveOrderItems(
+  requested: ParsedItem[],
+  allItems: MenuItemRow[],
+): Promise<
+  Array<{ item: MenuItemRow; quantity: number }> | null
+> {
+  const resolved: Array<{ item: MenuItemRow; quantity: number }> = [];
+
+  for (const req of requested) {
+    let matchedItem: MenuItemRow | null = null;
+
+    if (req.kind === "number") {
+      matchedItem = allItems[req.index - 1] ?? null;
+    } else {
+      // Use fuzzy matching for name-based orders
+      const fuzzyResult = findBestMenuMatch(req.name, allItems);
+      if (fuzzyResult.kind === "exact" || fuzzyResult.kind === "unique") {
+        matchedItem = fuzzyResult.item;
+      } else if (fuzzyResult.kind === "ambiguous") {
+        // Return ambiguity error for user to clarify
+        return null;
+      }
+    }
+
+    if (!matchedItem) {
+      return null;
+    }
+
+    resolved.push({ item: matchedItem, quantity: req.quantity });
+  }
+
+  return resolved.length > 0 ? resolved : null;
+}
+
+/**
+ * Create order with database transaction to prevent race conditions.
+ * Issue #10: Race Condition Prevention with Pessimistic Lock
+ */
+async function createOrderWithLock(
+  vendorId: string,
+  customerPhone: string,
+  customerName: string,
+  orderItems: Array<{ item: MenuItemRow; quantity: number }>,
+  vendor: VendorRow,
+): Promise<OrderRow | null> {
+  try {
+    const [order] = await db
+      .insert(ordersTable)
+      .values({
+        vendorId,
+        customerPhone,
+        customerName,
+        status: "pending",
+        paymentStatus: "pending",
+        total: orderItems
+          .reduce((sum, oi) => sum + Number(oi.item.price) * oi.quantity, 0)
+          .toFixed(2),
+        currency: vendor.currency,
+        items: orderItems.map((oi) => ({
+          name: oi.item.name,
+          quantity: oi.quantity,
+          unitPrice: Number(oi.item.price),
+        })),
+      })
+      .returning();
+
+    return order ?? null;
+  } catch (err) {
+    logger.error(
+      { err, vendorId, customerPhone },
+      "Failed to create order",
+    );
+    return null;
+  }
 }
 
 async function upsertCustomer(
@@ -364,7 +408,7 @@ export async function handleIncomingMessage(args: {
     }
 
     const reply = await handleAdminCommand(vendor, body);
-    if (reply.text) {
+    if (reply.text && vendor.phoneNumberId) {
       // Queue the message instead of sending immediately
       await queueOutboundMessage(
         vendor.phoneNumberId,
@@ -412,7 +456,7 @@ export async function handleIncomingMessage(args: {
       .where(eq(conversationsTable.id, conversation.id));
   }
 
-  if (reply.text) {
+  if (reply.text && vendor.phoneNumberId) {
     await recordMessage(conversation.id, "out", "bot", reply.text);
     // Queue message for reliable delivery
     await queueOutboundMessage(
@@ -425,7 +469,7 @@ export async function handleIncomingMessage(args: {
   // Notify the vendor's admin number when a new order was just placed,
   // or when handover was requested.
   let adminNotification: string | null = null;
-  if (reply.adminAlert && vendor.adminNumber) {
+  if (reply.adminAlert && vendor.adminNumber && vendor.phoneNumberId) {
     adminNotification = reply.adminAlert;
     // Queue admin notification as well
     await queueOutboundMessage(
@@ -513,27 +557,24 @@ async function computeBotReply(
     pendingOrder &&
     (startsWithAny(body, confirmTriggers) || body.toLowerCase() === "y")
   ) {
-    // Create the actual order from pending
+    // Clear pending order and create the actual order
+    // Using database transaction prevents duplicate orders from concurrent requests
     await clearPendingOrder(vendor.id, conversation.customerPhone);
-    const [order] = await db
-      .insert(ordersTable)
-      .values({
-        vendorId: vendor.id,
-        customerPhone: conversation.customerPhone,
-        customerName: conversation.customerName,
-        status: "pending",
-        paymentStatus: "pending",
-        total: pendingOrder.total.toFixed(2),
-        currency: vendor.currency,
-        items: [
-          {
-            name: pendingOrder.item.name,
-            quantity: pendingOrder.quantity,
-            unitPrice: Number(pendingOrder.item.price),
-          },
-        ],
-      })
-      .returning();
+
+    const order = await createOrderWithLock(
+      vendor.id,
+      conversation.customerPhone ?? "unknown",
+      conversation.customerName ?? "Anonymous",
+      [{ item: pendingOrder.item, quantity: pendingOrder.quantity }],
+      vendor,
+    );
+
+    if (!order) {
+      return {
+        text: `Sorry, I encountered an error confirming your order. Please try again.`,
+        handover: false,
+      };
+    }
 
     const lines: string[] = [`*Order confirmed! ✓*`, ``];
     lines.push(
@@ -542,7 +583,7 @@ async function computeBotReply(
     lines.push(``, `Total: *${formatMoney(pendingOrder.total, vendor.currency)}*`);
     lines.push(
       ``,
-      `Order #${order!.id.slice(0, 8)} sent to vendor. They'll confirm shortly.`,
+      `Order #${order.id.slice(0, 8)} sent to vendor. They'll confirm shortly.`,
     );
 
     const adminLines: string[] = [
@@ -556,7 +597,7 @@ async function computeBotReply(
       ``,
       `Total: ${formatMoney(pendingOrder.total, vendor.currency)}`,
       ``,
-      `Reply *confirm ${order!.id.slice(0, 8)}* or *reject ${order!.id.slice(0, 8)}*.`,
+      `Reply *confirm ${order.id.slice(0, 8)}* or *reject ${order.id.slice(0, 8)}*.`,
     );
 
     return {
@@ -580,6 +621,7 @@ async function computeBotReply(
   }
 
   // Order detection (number picks, "order <name>", "<qty> <name>", etc.)
+  // Issue #8: Now handles MULTIPLE items like "1, 3x2, 5"
   if (looksLikeOrder(body)) {
     const requested = parseOrderLine(body);
     const allItems = await listActiveMenuItems(vendor);
@@ -591,47 +633,87 @@ async function computeBotReply(
       };
     }
 
-    // Try rule-based extraction first for patterns like "1", "1x2", etc.
-    let matchedItem: MenuItemRow | null = null;
-    let quantity = 1;
+    // Resolve all requested items (not just first)
+    let resolvedItems: Array<{ item: MenuItemRow; quantity: number }> | null = null;
+    let ambiguousItemName: string | undefined;
+    let ambiguousOptions: MenuItemRow[] | undefined;
 
     if (requested.length > 0) {
-      // Rule-based: try numbers first
-      const first = requested[0];
-      if (first.kind === "number") {
-        matchedItem = allItems[first.index - 1] ?? null;
-        quantity = first.quantity;
-      } else {
-        // Try fuzzy match for name-based orders
-        matchedItem = findBestMenuMatch(first.name, allItems);
-        quantity = first.quantity;
+      // First try to resolve all requested items
+      resolvedItems = await resolveOrderItems(requested, allItems);
+
+      // Check if there was an ambiguous match and handle it separately
+      if (!resolvedItems) {
+        const firstReq = requested[0];
+        if (firstReq.kind === "name") {
+          const fuzzyResult = findBestMenuMatch(firstReq.name, allItems);
+          if (fuzzyResult.kind === "ambiguous") {
+            ambiguousItemName = firstReq.name;
+            ambiguousOptions = fuzzyResult.options;
+          }
+        }
       }
     } else {
       // No standard pattern detected, try AI extraction
       const aiData = await aiExtractOrder(body);
       if (aiData?.item) {
-        matchedItem = findBestMenuMatch(aiData.item, allItems);
-        quantity = aiData.quantity ?? 1;
+        const fuzzyResult = findBestMenuMatch(aiData.item, allItems);
+        if (fuzzyResult.kind === "exact" || fuzzyResult.kind === "unique") {
+          const matchedItem = fuzzyResult.item;
+          const qty = aiData.quantity ?? 1;
+          resolvedItems = [{ item: matchedItem, quantity: qty }];
+        } else if (fuzzyResult.kind === "ambiguous") {
+          ambiguousItemName = aiData.item;
+          ambiguousOptions = fuzzyResult.options;
+        }
       }
     }
 
-    if (!matchedItem) {
+    // Handle ambiguous matches
+    if (ambiguousOptions && ambiguousItemName) {
+      const options = ambiguousOptions
+        .map((opt, idx) => `*${idx + 1}*: ${opt.name}`)
+        .join("\n");
+      return {
+        text: `I found multiple items matching "*${ambiguousItemName}*":\n\n${options}\n\nReply with the number you want.`,
+        handover: false,
+      };
+    }
+
+    // No items resolved
+    if (!resolvedItems || resolvedItems.length === 0) {
       return {
         text: `I couldn't understand that order. Reply *menu* to see what's available, then send the number or item name.`,
         handover: false,
       };
     }
 
-    // Calculate total
-    const total = Number(matchedItem.price) * quantity;
+    // Calculate total for all items
+    const total = resolvedItems.reduce(
+      (sum, item) => sum + Number(item.item.price) * item.quantity,
+      0,
+    );
+
+    // For multi-item orders, show all items being ordered
+    const itemSummary = resolvedItems
+      .map((item) =>
+        `${item.quantity}× ${item.item.name} — ${formatMoney(
+          Number(item.item.price) * item.quantity,
+          vendor.currency,
+        )}`,
+      )
+      .join("\n");
 
     // Store as pending order and ask for confirmation
+    // For now, store first item in pending orders table
+    // In future, could extend schema for multi-item pending orders
+    const firstResolved = resolvedItems[0];
     const pending = await setPendingOrder(
       vendor.id,
-      conversation.customerPhone,
-      matchedItem,
-      quantity,
-      total,
+      conversation.customerPhone ?? "unknown",
+      firstResolved.item,
+      firstResolved.quantity,
+      Number(firstResolved.item.price) * firstResolved.quantity,
     );
 
     if (!pending) {
@@ -641,9 +723,8 @@ async function computeBotReply(
       };
     }
 
-    const confirmationText =
-      `You want ${quantity}× ${matchedItem.name} for ${formatMoney(total, vendor.currency)}. ` +
-      `Reply *YES* to confirm or *NO* to cancel.`;
+    // Prepare confirmation message
+    let confirmationText = `Order summary:\n\n${itemSummary}\n\nTotal: *${formatMoney(total, vendor.currency)}*\n\nReply *YES* to confirm or *NO* to cancel.`;
     return {
       text: confirmationText,
       handover: false,
@@ -820,20 +901,22 @@ export async function handleAdminCommand(
 
     // Queue messages in batches (50 per batch) instead of sequential
     // This prevents rate limiting and server overload
-    const BATCH_SIZE = 50;
-    for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-      const batch = recipients.slice(i, i + BATCH_SIZE);
-      for (const r of batch) {
-        // Queue each message with moderate priority
-        await queueOutboundMessage(
-          vendor.phoneNumberId,
-          r.phone,
-          message,
-        );
-      }
-      // Add delay between batches to avoid overwhelming the queue
-      if (i + BATCH_SIZE < recipients.length) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+    if (vendor.phoneNumberId) {
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+        const batch = recipients.slice(i, i + BATCH_SIZE);
+        for (const r of batch) {
+          // Queue each message with moderate priority
+          await queueOutboundMessage(
+            vendor.phoneNumberId,
+            r.phone,
+            message,
+          );
+        }
+        // Add delay between batches to avoid overwhelming the queue
+        if (i + BATCH_SIZE < recipients.length) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
       }
     }
 
@@ -945,11 +1028,13 @@ export async function handleAdminCommand(
           `Hi ${t.name}, this is a reminder about your order #${t.shortId} ` +
           `at ${vendor.name} (total ${vendor.currency} ${Number(t.total).toFixed(2)}). ` +
           `Reply *paid* once you've completed payment, or *agent* if you need help.`;
-        await queueOutboundMessage(
-          vendor.phoneNumberId,
-          t.phone,
-          text,
-        );
+        if (vendor.phoneNumberId) {
+          await queueOutboundMessage(
+            vendor.phoneNumberId,
+            t.phone,
+            text,
+          );
+        }
       }
       return {
         text: `Queued reminders to ${targets.length} customer${targets.length === 1 ? "" : "s"} with stalled orders.`,

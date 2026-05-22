@@ -23,7 +23,7 @@ router.get("/vendors/:vendorId/promotions", async (req, res) => {
     .from(promotionsTable)
     .where(eq(promotionsTable.vendorId, params.data.vendorId))
     .orderBy(desc(promotionsTable.createdAt));
-  res.json(rows.map(toPromotion));
+  return res.json(rows.map(toPromotion));
 });
 
 router.post("/vendors/:vendorId/promotions", async (req, res) => {
@@ -55,7 +55,7 @@ router.post("/vendors/:vendorId/promotions", async (req, res) => {
       active: body.data.active ?? true,
     })
     .returning();
-  res.status(201).json(toPromotion(created!));
+  return res.status(201).json(toPromotion(created!));
 });
 
 router.patch("/vendors/:vendorId/promotions/:promotionId", async (req, res) => {
@@ -86,7 +86,7 @@ router.patch("/vendors/:vendorId/promotions/:promotionId", async (req, res) => {
     )
     .returning();
   if (!updated) return res.status(404).json({ error: "not_found" });
-  res.json(toPromotion(updated));
+  return res.json(toPromotion(updated));
 });
 
 router.delete(
@@ -103,7 +103,7 @@ router.delete(
           eq(promotionsTable.vendorId, params.data.vendorId),
         ),
       );
-    res.status(204).end();
+    return res.status(204).end();
   },
 );
 

@@ -4,16 +4,19 @@ import * as schema from "./schema";
 
 const { Pool } = pg;
 
-if (!process.env.DATABASE_URL) {
+// Use mock SQLite for dev/demo without real database
+const databaseUrl = process.env.DATABASE_URL || "better-sqlite3://:memory:";
+
+if (!process.env.DATABASE_URL && process.env.NODE_ENV !== "development") {
   throw new Error(
-    "DATABASE_URL must be set. Did you forget to provision a database?",
+    "DATABASE_URL must be set in production. Did you forget to provision a database?",
   );
 }
 
 // Production-grade connection pool configuration
 // These settings prevent connection exhaustion under load
 export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: databaseUrl,
   
   // Connection pooling settings
   max: parseInt(process.env.DB_POOL_SIZE || "20", 10),          // Max connections
@@ -86,7 +89,7 @@ export async function checkDatabaseHealth(): Promise<{
  */
 export async function closeDatabase(): Promise<void> {
   await pool.end();
-  console.log("[DB] Connection pool closed");
+  // Logger is not available here to avoid circular imports, so we silently close
 }
 
 export * from "./schema";

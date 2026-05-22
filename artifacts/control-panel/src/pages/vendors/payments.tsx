@@ -1,4 +1,4 @@
-import { useGetVendor, useListVendorPayments } from "@workspace/api-client-react";
+import { useGetVendor, useListVendorPayments, getGetVendorQueryKey, getListVendorPaymentsQueryKey } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatCurrency, cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -11,8 +11,8 @@ const STATUS_TONE: Record<string, string> = {
 };
 
 export default function VendorPayments({ vendorId }: { vendorId: string }) {
-  const { data: vendor } = useGetVendor(vendorId, { query: { enabled: !!vendorId } });
-  const { data: payments, isLoading } = useListVendorPayments(vendorId, { query: { enabled: !!vendorId } });
+  const { data: vendor } = useGetVendor(vendorId, { query: { enabled: !!vendorId, queryKey: getGetVendorQueryKey(vendorId) } });
+  const { data: payments, isLoading } = useListVendorPayments(vendorId, { query: { enabled: !!vendorId, queryKey: getListVendorPaymentsQueryKey(vendorId) } });
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">

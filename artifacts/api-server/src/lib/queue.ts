@@ -45,7 +45,6 @@ export interface BroadcastMessageJob {
 export const incomingQueue = new Queue("incoming-messages", REDIS_URL, {
   settings: {
     maxStalledCount: 3,        // Max times a job can be stalled before failed
-    maxRetriesPerStalledInterval: 2,
     stalledInterval: 30000,    // Check for stalled jobs every 30 seconds
     lockRenewTime: 15000,      // Renew lock every 15 seconds
     lockDuration: 60000,       // Lock expires after 60 seconds
@@ -68,7 +67,6 @@ export const incomingQueue = new Queue("incoming-messages", REDIS_URL, {
 export const outboundQueue = new Queue("outbound-messages", REDIS_URL, {
   settings: {
     maxStalledCount: 5,
-    maxRetriesPerStalledInterval: 3,
     stalledInterval: 30000,
     lockRenewTime: 15000,
     lockDuration: 60000,

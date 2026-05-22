@@ -6,6 +6,46 @@ import { closeDatabase, checkDatabaseHealth } from "@workspace/db";
 import { scheduleIdempotencyKeyCleanup } from "./lib/idempotency";
 import { scheduleExpiredPendingOrdersCleanup } from "./lib/pending-orders";
 
+/**
+ * Validate all required environment variables at startup
+ * This prevents runtime failures due to missing configuration
+ */
+function validateEnvironment() {
+  const required = [
+    "PORT",
+    "NODE_ENV",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "VERIFY_TOKEN",
+    "ACCESS_TOKEN",
+  ];
+
+  const missing: string[] = [];
+  for (const key of required) {
+    if (!process.env[key]) {
+      missing.push(key);
+    }
+  }
+
+  if (missing.length > 0) {
+    const message = `Missing required environment variables: ${missing.join(", ")}. 
+Please check your .env file and ensure all required variables are set.
+Reference .env.example for a complete list of required variables.`;
+    logger.error({ missing }, message);
+    throw new Error(message);
+  }
+
+  logger.info("✅ All required environment variables are set");
+}
+
+// Validate environment before anything else
+try {
+  validateEnvironment();
+} catch (err) {
+  logger.error({ err }, "Environment validation failed - cannot start server");
+  process.exit(1);
+}
+
 const rawPort = process.env["PORT"];
 
 if (!rawPort) {
@@ -40,14 +80,27 @@ async function initializeProduction() {
     // Check database connectivity
     const dbHealth = await checkDatabaseHealth();
     if (!dbHealth.ok) {
-      logger.error(dbHealth, "Database health check failed");
-      process.exit(1);
+      if (process.env.NODE_ENV === "development") {
+        logger.warn(dbHealth, "Database health check failed (development mode - continuing anyway)");
+      } else {
+        logger.error(dbHealth, "Database health check failed");
+        process.exit(1);
+      }
+    } else {
+      logger.info(dbHealth, "Database health check passed");
     }
-    logger.info(dbHealth, "Database health check passed");
 
     // Start queue workers (process background jobs)
-    await setupQueueWorkers();
-    logger.info("Queue workers initialized");
+    try {
+      await setupQueueWorkers();
+      logger.info("Queue workers initialized");
+    } catch (err) {
+      if (process.env.NODE_ENV === "development") {
+        logger.warn({ err }, "Queue workers setup failed (development mode - continuing anyway)");
+      } else {
+        throw err;
+      }
+    }
 
     // Schedule periodic cleanups
     scheduleIdempotencyKeyCleanup(3600000); // Every hour
@@ -57,7 +110,9 @@ async function initializeProduction() {
     logger.info("✅ All production systems initialized");
   } catch (err) {
     logger.error({ err }, "Failed to initialize production systems");
-    process.exit(1);
+    if (process.env.NODE_ENV !== "development") {
+      process.exit(1);
+    }
   }
 }
 

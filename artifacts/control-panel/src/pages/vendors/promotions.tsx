@@ -6,6 +6,7 @@ import {
   useUpdateVendorPromotion,
   useDeleteVendorPromotion,
   getListVendorPromotionsQueryKey,
+  getGetVendorQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -19,9 +20,9 @@ import { format } from "date-fns";
 
 export default function VendorPromotions({ vendorId }: { vendorId: string }) {
   const qc = useQueryClient();
-  const { data: vendor } = useGetVendor(vendorId, { query: { enabled: !!vendorId } });
+  const { data: vendor } = useGetVendor(vendorId, { query: { enabled: !!vendorId, queryKey: getGetVendorQueryKey(vendorId) } });
   const { data: promos, isLoading } = useListVendorPromotions(vendorId, {
-    query: { enabled: !!vendorId },
+    query: { enabled: !!vendorId, queryKey: getListVendorPromotionsQueryKey(vendorId) },
   });
   const create = useCreateVendorPromotion();
   const update = useUpdateVendorPromotion();

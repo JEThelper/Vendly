@@ -22,7 +22,7 @@ router.get("/vendors/:vendorId/menu", async (req, res) => {
     .from(menuItemsTable)
     .where(eq(menuItemsTable.vendorId, params.data.vendorId))
     .orderBy(asc(menuItemsTable.category), asc(menuItemsTable.name));
-  res.json(rows.map(toMenuItem));
+  return res.json(rows.map(toMenuItem));
 });
 
 router.post("/vendors/:vendorId/menu", async (req, res) => {
@@ -41,7 +41,7 @@ router.post("/vendors/:vendorId/menu", async (req, res) => {
       available: body.data.available ?? true,
     })
     .returning();
-  res.status(201).json(toMenuItem(created!));
+  return res.status(201).json(toMenuItem(created!));
 });
 
 router.patch("/menu/:itemId", async (req, res) => {
@@ -66,14 +66,14 @@ router.patch("/menu/:itemId", async (req, res) => {
     .where(eq(menuItemsTable.id, params.data.itemId))
     .returning();
   if (!updated) return res.status(404).json({ error: "not_found" });
-  res.json(toMenuItem(updated));
+  return res.json(toMenuItem(updated));
 });
 
 router.delete("/menu/:itemId", async (req, res) => {
   const params = DeleteMenuItemParams.safeParse(req.params);
   if (!params.success) return res.status(400).json({ error: "invalid_params" });
   await db.delete(menuItemsTable).where(eq(menuItemsTable.id, params.data.itemId));
-  res.status(204).end();
+  return res.status(204).end();
 });
 
 export default router;

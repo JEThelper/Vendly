@@ -1,0 +1,16 @@
+
+> @workspace/control-panel@0.0.0 dev
+> vite --config vite.config.ts --host 0.0.0.0
+
+failed to load config from /workspaces/Automation-Bot/Vendor-Connect-Hub/artifacts/control-panel/vite.config.ts
+error when starting dev server:
+Error: BASE_PATH environment variable is required but was not provided.
+    at file:///workspaces/Automation-Bot/Vendor-Connect-Hub/artifacts/control-panel/node_modules/.vite-temp/vite.config.ts.timestamp-1779226272017-1a25175415c31.mjs:20:9
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async loadConfigFromBundledFile (file:///workspaces/Automation-Bot/Vendor-Connect-Hub/node_modules/.pnpm/vite@7.3.2_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/chunks/config.js:35920:12)
+    at async bundleAndLoadConfigFile (file:///workspaces/Automation-Bot/Vendor-Connect-Hub/node_modules/.pnpm/vite@7.3.2_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/chunks/config.js:35808:17)
+    at async loadConfigFromFile (file:///workspaces/Automation-Bot/Vendor-Connect-Hub/node_modules/.pnpm/vite@7.3.2_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/chunks/config.js:35775:42)
+    at async resolveConfig (file:///workspaces/Automation-Bot/Vendor-Connect-Hub/node_modules/.pnpm/vite@7.3.2_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/chunks/config.js:35424:22)
+    at async _createServer (file:///workspaces/Automation-Bot/Vendor-Connect-Hub/node_modules/.pnpm/vite@7.3.2_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/chunks/config.js:25365:67)
+    at async CAC.<anonymous> (file:///workspaces/Automation-Bot/Vendor-Connect-Hub/node_modules/.pnpm/vite@7.3.2_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/cli.js:572:18)

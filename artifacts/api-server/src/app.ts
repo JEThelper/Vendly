@@ -26,7 +26,19 @@ app.use(
   }),
 );
 app.use(cors());
-app.use(express.json());
+
+// ────────────────────────────────────────────────────────────────────────
+// SECURITY: Capture raw body before JSON parsing (needed for webhook signature verification)
+// ────────────────────────────────────────────────────────────────────────
+app.use(
+  express.json({
+    verify: (req: any, res, buf) => {
+      // Store the raw body for webhook signature verification
+      req.rawBody = buf.toString("utf-8");
+    },
+  }),
+);
+
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);

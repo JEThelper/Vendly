@@ -23,7 +23,7 @@ export default function VendorOrders({ vendorId }: { vendorId: string }) {
   const [filter, setFilter] = useState<StatusFilter>("all");
   const params = filter === "all" ? undefined : { status: filter as Exclude<StatusFilter, "all"> };
   const { data: orders, isLoading } = useListVendorOrders(vendorId, params, {
-    query: { enabled: !!vendorId, refetchInterval: 5000 },
+    query: { enabled: !!vendorId, refetchInterval: 5000, queryKey: getListVendorOrdersQueryKey(vendorId, params) },
   });
 
   return (
@@ -108,7 +108,7 @@ function OrderRow({ order, vendorId }: { order: NonNullable<ReturnType<typeof us
               <OrderStatusBadge status={order.status} />
             </div>
             <ul className="text-sm text-muted-foreground mt-2 space-y-0.5">
-              {order.items.map((it, idx) => (
+              {order.items?.map((it: any, idx: number) => (
                 <li key={idx} className="tabular-nums">
                   {it.quantity}× {it.name} <span className="text-muted-foreground/60">— {formatCurrency(it.unitPrice * it.quantity, order.currency)}</span>
                 </li>

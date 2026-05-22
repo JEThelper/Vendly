@@ -1,0 +1,54 @@
+{
+  "version": 2,
+  "buildCommand": "pnpm install && pnpm run build",
+  "framework": "other",
+  "env": {
+    "NODE_ENV": {
+      "description": "Node environment (production for Vercel)"
+    },
+    "PORT": {
+      "description": "Server port (Vercel sets this automatically, default: 3000)"
+    },
+    "DATABASE_URL": {
+      "description": "PostgreSQL connection string with credentials",
+      "required": true
+    },
+    "REDIS_URL": {
+      "description": "Redis connection URL for message queue",
+      "required": true
+    },
+    "VERIFY_TOKEN": {
+      "description": "Webhook verification token (you create this - must be strong)",
+      "required": true
+    },
+    "ACCESS_TOKEN": {
+      "description": "Meta WhatsApp Business Account access token",
+      "required": true
+    },
+    "GEMINI_API_KEY": {
+      "description": "Google Gemini API key for AI-powered order extraction (optional)",
+      "required": false
+    },
+    "LOG_LEVEL": {
+      "description": "Logging level (info, debug, warn, error)"
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/dist/index.mjs",
+      "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/dist/index.mjs"
+    }
+  ],
+  "functions": {
+    "artifacts/api-server/dist/index.mjs": {
+      "maxDuration": 30,
+      "memory": 1024
+    }
+  },
+  "outputDirectory": "artifacts/api-server/dist"
+}

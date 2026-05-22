@@ -194,8 +194,8 @@ Timeline (milliseconds)
 010ms: Worker picks up
 011ms: Parse order line (no pattern match)
 012ms: Try AI extraction
-013ms: Start API call to OpenAI
-025ms: OpenAI responds (12ms round-trip)
+013ms: Start API call to Gemini
+025ms: Gemini responds (12ms round-trip)
 026ms: Parse JSON response
 027ms: Validate quantity and item name
 028ms: Fuzzy match "pizza" to menu item "Pepperoni Pizza"
@@ -204,7 +204,7 @@ Timeline (milliseconds)
 040ms: WhatsApp message sent
 
 TOTAL: 40ms API call + latency
-MAX: 5000ms (circuit breaker timeout if OpenAI slow)
+MAX: 5000ms (circuit breaker timeout if Gemini slow)
 ```
 
 ### Example 3: Message Retry Scenario
@@ -311,7 +311,7 @@ new RateLimiter(20, 60000, 2000)
 **Current**: 5 seconds
 
 ```
-If OpenAI usually responds < 1s:
+If Gemini usually responds < 1s:
   Reduce to 3 seconds (fail faster)
   
 If users on slow networks:
@@ -530,7 +530,7 @@ Load          API Instances   DB Connections   Queue Depth
 **Causes** (in order of likelihood):
 1. Database too slow (checkout queries)
 2. Not enough workers (increase concurrency)
-3. ExternalAPI slow (OpenAI, WhatsApp)
+3. ExternalAPI slow (Gemini, WhatsApp)
 4. Memory pressure (GC pauses)
 
 **Fix**:
@@ -562,7 +562,7 @@ curl http://api:3000/api/health/deep | jq .systems.database
 # 2. WhatsApp API
 grep "WhatsApp send failed" /var/log/app.log
 
-# 3. OpenAI timeout
+# 3. Gemini timeout
 grep "AI extraction timeout" /var/log/app.log
 
 # 4. Rate limiting (expected)

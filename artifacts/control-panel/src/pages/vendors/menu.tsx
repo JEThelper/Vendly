@@ -19,13 +19,20 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, Trash2, Pencil, MenuSquare } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 
-type MenuItem = ReturnType<typeof useGetVendorMenu>["data"] extends (infer T)[] | undefined ? T : never;
+interface MenuItem {
+  id: string;
+  name: string;
+  description?: string | null;
+  price: number;
+  category?: string;
+  available: boolean;
+}
 
 export default function VendorMenu({ vendorId }: { vendorId: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const { data: vendor } = useGetVendor(vendorId, { query: { enabled: !!vendorId } });
-  const { data: items, isLoading } = useGetVendorMenu(vendorId, { query: { enabled: !!vendorId } });
+  const { data: vendor } = useGetVendor(vendorId, { query: { enabled: !!vendorId, queryKey: ["vendor", vendorId] } });
+  const { data: items, isLoading } = useGetVendorMenu(vendorId, { query: { enabled: !!vendorId, queryKey: ["vendorMenu", vendorId] } });
 
   const updateItem = useUpdateMenuItem();
   const deleteItem = useDeleteMenuItem();

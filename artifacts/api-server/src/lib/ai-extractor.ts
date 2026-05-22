@@ -1,40 +1,17 @@
-import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { logger } from "./logger";
-import { createAICircuitBreaker } from "./circuit-breaker";
 
-// Lazily initialize OpenAI only if API key is present
-let openai: OpenAI | null = null;
-let aiCircuitBreaker: ReturnType<typeof createAICircuitBreaker> | null = null;
+// Lazily initialize Gemini only if API key is present
+let gemini: GoogleGenerativeAI | null = null;
 
-function getOpenAIClient(): OpenAI | null {
-  if (!process.env.OPENAI_API_KEY) {
+function getGeminiClient(): GoogleGenerativeAI | null {
+  if (!process.env.GEMINI_API_KEY) {
     return null;
   }
-  if (!openai) {
-    openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-      // Add timeout to client configuration
-      timeout: 5000,
-    });
+  if (!gemini) {
+    gemini = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   }
-  return openai;
-}
-
-function getAICircuitBreaker() {
-  if (!aiCircuitBreaker) {
-    const client = getOpenAIClient();
-    if (client) {
-      aiCircuitBreaker = createAICircuitBreaker(
-        () => Promise.resolve(null), // Dummy function, will be replaced
-        {
-          timeout: 5000,
-          errorThresholdPercentage: 50,
-          resetTimeout: 30000,
-        },
-      );
-    }
-  }
-  return aiCircuitBreaker;
+  return gemini;
 }
 
 export type ExtractedOrder = {
@@ -43,7 +20,7 @@ export type ExtractedOrder = {
 };
 
 /**
- * Attempts to extract order details using AI.
+ * Attempts to extract order details using Gemini AI.
  * Returns null if:
  * - API key is not set (stub mode)
  * - API call times out (5 second limit)
@@ -53,14 +30,14 @@ export type ExtractedOrder = {
  * - Quantity is invalid
  * 
  * IMPORTANT: This function WILL NOT BLOCK indefinitely.
- * Even if OpenAI API hangs, we timeout after 5 seconds and fall back to rule-based.
+ * Even if Gemini API hangs, we timeout after 5 seconds and fall back to rule-based.
  */
 export async function aiExtractOrder(text: string): Promise<ExtractedOrder | null> {
-  const client = getOpenAIClient();
+  const client = getGeminiClient();
 
   // Fail safely: no API key = stub mode
   if (!client) {
-    logger.debug("OPENAI_API_KEY not set, skipping AI extraction");
+    logger.debug("GEMINI_API_KEY not set, skipping AI extraction");
     return null;
   }
 
@@ -72,27 +49,25 @@ export async function aiExtractOrder(text: string): Promise<ExtractedOrder | nul
       }, 5000);
     });
 
+    const model = client.getGenerativeModel({ model: "gemini-1.5-flash" });
+    
     const response = await Promise.race([
-      client.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "Extract food order details from user message. Return ONLY valid JSON with 'item' (product name) and 'quantity' (number >= 1) fields. Example: {\"item\": \"pizza\", \"quantity\": 2}. If you cannot extract, return null.",
-          },
+      model.generateContent({
+        contents: [
           {
             role: "user",
-            content: text,
+            parts: [
+              {
+                text: `Extract food order details from this message. Return ONLY valid JSON with 'item' (product name) and 'quantity' (number >= 1) fields. Example: {"item": "pizza", "quantity": 2}. If you cannot extract, return null.\n\nMessage: ${text}`,
+              },
+            ],
           },
         ],
-        temperature: 0.3,
-        max_tokens: 100,
       }),
       timeoutPromise,
     ]);
 
-    const content = response.choices[0]?.message?.content;
+    const content = response.response.text();
     if (!content) {
       logger.debug("AI returned empty response");
       return null;

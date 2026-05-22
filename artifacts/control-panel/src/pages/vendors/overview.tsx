@@ -1,4 +1,4 @@
-import { useGetVendor, useListVendorOrders, useListVendorConversations } from "@workspace/api-client-react";
+import { useGetVendor, useListVendorOrders, useListVendorConversations, getGetVendorQueryKey, getListVendorOrdersQueryKey, getListVendorConversationsQueryKey } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Link } from "wouter";
 import { formatCurrency } from "@/lib/utils";
@@ -8,13 +8,13 @@ import { formatDistanceToNow } from "date-fns";
 
 export default function VendorOverview({ vendorId }: { vendorId: string }) {
   const { data: vendor, isLoading } = useGetVendor(vendorId, {
-    query: { enabled: !!vendorId, refetchInterval: 6000 },
+    query: { enabled: !!vendorId, refetchInterval: 6000, queryKey: getGetVendorQueryKey(vendorId) },
   });
   const { data: orders } = useListVendorOrders(vendorId, undefined, {
-    query: { enabled: !!vendorId },
+    query: { enabled: !!vendorId, queryKey: getListVendorOrdersQueryKey(vendorId) },
   });
   const { data: conversations } = useListVendorConversations(vendorId, {
-    query: { enabled: !!vendorId },
+    query: { enabled: !!vendorId, queryKey: getListVendorConversationsQueryKey(vendorId) },
   });
 
   if (isLoading || !vendor) return <PageSkeleton />;

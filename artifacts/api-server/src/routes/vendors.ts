@@ -47,14 +47,14 @@ router.post("/vendors", async (req, res) => {
         welcomeMessage: data.welcomeMessage ?? null,
       })
       .returning();
-    res.status(201).json(toVendor(created!));
+    return res.status(201).json(toVendor(created!));
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "unknown_error";
     if (message.includes("duplicate") || message.includes("unique")) {
       return res.status(409).json({ error: "phone_already_used" });
     }
     req.log.error({ err }, "Failed to create vendor");
-    res.status(500).json({ error: "internal_error" });
+    return res.status(500).json({ error: "internal_error" });
   }
 });
 
@@ -128,6 +128,19 @@ router.get("/vendors/:vendorId", async (req, res) => {
       openConversations: Number(openConversations),
     },
   });
+  return res.json({
+    ...toVendor(v),
+    stats: {
+      totalOrders,
+      pendingOrders,
+      confirmedOrders,
+      paidOrders,
+      revenue,
+      menuItems: Number(menuItems),
+      customers: Number(customers),
+      openConversations: Number(openConversations),
+    },
+  });
 });
 
 router.patch("/vendors/:vendorId", async (req, res) => {
@@ -163,14 +176,14 @@ router.patch("/vendors/:vendorId", async (req, res) => {
     .where(eq(vendorsTable.id, params.data.vendorId))
     .returning();
   if (!updated) return res.status(404).json({ error: "not_found" });
-  res.json(toVendor(updated));
+  return res.json(toVendor(updated));
 });
 
 router.delete("/vendors/:vendorId", async (req, res) => {
   const params = DeleteVendorParams.safeParse(req.params);
   if (!params.success) return res.status(400).json({ error: "invalid_params" });
   await db.delete(vendorsTable).where(eq(vendorsTable.id, params.data.vendorId));
-  res.status(204).end();
+  return res.status(204).end();
 });
 
 export default router;

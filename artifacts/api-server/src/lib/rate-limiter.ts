@@ -19,9 +19,9 @@ interface RateLimitEntry {
 export class RateLimiter {
   private store = new Map<string, RateLimitEntry>();
   private limits: {
-    maxRequests: number;
-    windowMs: number;
-    blockDurationMs: number;
+    readonly maxRequests: number;
+    readonly windowMs: number;
+    readonly blockDurationMs: number;
   };
 
   constructor(
@@ -136,7 +136,11 @@ export class RateLimiter {
    */
   getStats(): {
     entriesCount: number;
-    limits: typeof this.limits;
+    limits: {
+      readonly maxRequests: number;
+      readonly windowMs: number;
+      readonly blockDurationMs: number;
+    };
   } {
     return {
       entriesCount: this.store.size,

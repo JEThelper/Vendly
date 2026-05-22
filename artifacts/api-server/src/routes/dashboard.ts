@@ -162,7 +162,7 @@ router.get("/dashboard/activity", async (_req, res) => {
     });
   }
   items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-  res.json(items.slice(0, 12));
+  return res.json(items.slice(0, 12));
 });
 
 router.get("/vendors/:vendorId/analytics", async (req, res) => {
@@ -229,7 +229,7 @@ router.get("/vendors/:vendorId/analytics", async (req, res) => {
   const repeat = customers.filter((c) => c.totalOrders > 1).length;
   const repeatCustomerRate = totalCustomers > 0 ? repeat / totalCustomers : 0;
 
-  res.json({ dailyOrders, dailyRevenue, topItems, repeatCustomerRate });
+  return res.json({ dailyOrders, dailyRevenue, topItems, repeatCustomerRate });
 });
 
 export default router;

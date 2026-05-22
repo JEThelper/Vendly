@@ -3,7 +3,7 @@ import { logger } from "./logger";
 
 /**
  * circuit-breaker.ts
- * Prevents cascading failures when external services (like OpenAI) are degraded.
+ * Prevents cascading failures when external services (like Gemini) are degraded.
  * 
  * Behavior:
  * - If 50% of recent requests fail, "open" the circuit

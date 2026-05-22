@@ -10,6 +10,7 @@ import { handleIncomingMessage } from "../lib/bot";
 import { queueIncomingMessage } from "../lib/queue";
 import { logger } from "../lib/logger";
 import { shouldRateLimitCustomer } from "../lib/rate-limiter";
+import { verifyWebhookSignature } from "../lib/webhook-signature";
 
 const router: IRouter = Router();
 
@@ -45,80 +46,107 @@ router.get("/webhook/messages", (req, res) => {
 //   }]
 // }
 router.post("/webhook/messages", async (req, res) => {
+  // SECURITY: Validate webhook signature (X-Hub-Signature-256 header)
+  // This ensures the request is genuinely from Meta
+  const signature = req.get("X-Hub-Signature-256");
+  const rawBody = (req as any).rawBody || JSON.stringify(req.body);
+  const accessToken = process.env.ACCESS_TOKEN;
+
+  if (!accessToken) {
+    logger.error("ACCESS_TOKEN not set - cannot validate webhook signatures");
+    return res.status(500).json({ error: "server_configuration_error" });
+  }
+
+  const isSignatureValid = verifyWebhookSignature(rawBody, signature, accessToken);
+  if (!isSignatureValid) {
+    logger.error("Webhook signature verification failed - rejecting request");
+    return res.status(403).json({ error: "signature_verification_failed" });
+  }
+
   // Always 200 immediately so Meta doesn't retry; do work in the background.
   res.sendStatus(200);
 
-  try {
-    const entries = (req.body?.entry ?? []) as unknown[];
-    for (const entry of entries) {
-      const changes = (entry as { changes?: unknown[] }).changes ?? [];
-      for (const change of changes) {
-        const value = (change as { value?: unknown }).value;
-        if (!value || typeof value !== "object") continue;
-        const v = value as {
-          metadata?: { phone_number_id?: string; display_phone_number?: string };
-          contacts?: Array<{ profile?: { name?: string }; wa_id?: string }>;
-          messages?: Array<{
-            from?: string;
-            type?: string;
-            text?: { body?: string };
-          }>;
-        };
-        const phoneNumberId = v.metadata?.phone_number_id;
-        const messages = v.messages ?? [];
-        if (!phoneNumberId || messages.length === 0) continue;
+  // Process webhook asynchronously (background job)
+  // This allows us to return 200 to Meta immediately before processing completes
+  (async () => {
+    try {
+      const entries = (req.body?.entry ?? []) as unknown[];
+      for (const entry of entries) {
+        const changes = (entry as { changes?: unknown[] }).changes ?? [];
+        for (const change of changes) {
+          const value = (change as { value?: unknown }).value;
+          if (!value || typeof value !== "object") continue;
+          const v = value as {
+            metadata?: { phone_number_id?: string; display_phone_number?: string };
+            contacts?: Array<{ profile?: { name?: string }; wa_id?: string }>;
+            messages?: Array<{
+              from?: string;
+              id?: string;
+              type?: string;
+              text?: { body?: string };
+            }>;
+          };
+          const phoneNumberId = v.metadata?.phone_number_id;
+          const messages = v.messages ?? [];
+          if (!phoneNumberId || messages.length === 0) continue;
 
-        const [vendor] = await db
-          .select()
-          .from(vendorsTable)
-          .where(eq(vendorsTable.phoneNumberId, phoneNumberId))
-          .limit(1);
+          const [vendor] = await db
+            .select()
+            .from(vendorsTable)
+            .where(eq(vendorsTable.phoneNumberId, phoneNumberId))
+            .limit(1);
 
-        if (!vendor) {
-          logger.warn(
-            { phoneNumberId },
-            "Inbound webhook: no vendor for phone_number_id",
-          );
-          continue;
-        }
-
-        for (const msg of messages) {
-          if (msg.type !== "text" || !msg.text?.body || !msg.from) continue;
-          const profileName =
-            v.contacts?.find((c) => c.wa_id === msg.from)?.profile?.name ??
-            msg.from;
-          
-          // CRITICAL: Check rate limit BEFORE queueing
-          // This prevents spam from filling up the queue
-          if (shouldRateLimitCustomer(msg.from)) {
+          if (!vendor) {
             logger.warn(
-              { phone: msg.from, vendorId: vendor.id },
-              "Rate limited: ignoring spam customer",
+              { phoneNumberId },
+              "Inbound webhook: no vendor for phone_number_id",
             );
             continue;
           }
-          
-          // PRODUCTION CHANGE: Queue the message instead of processing immediately
-          // This prevents request pile-up during traffic spikes
-          try {
-            await queueIncomingMessage(
-              vendor.id,
-              msg.from,
-              profileName,
-              msg.text.body,
-            );
-          } catch (err) {
-            logger.error(
-              { err, phone: msg.from, vendorId: vendor.id },
-              "Failed to queue incoming message",
-            );
+
+          for (const msg of messages) {
+            if (msg.type !== "text" || !msg.text?.body || !msg.from) continue;
+            const profileName =
+              v.contacts?.find((c) => c.wa_id === msg.from)?.profile?.name ??
+              msg.from;
+            
+            // CRITICAL: Check rate limit BEFORE queueing
+            // This prevents spam from filling up the queue
+            if (shouldRateLimitCustomer(msg.from)) {
+              logger.warn(
+                { phone: msg.from, vendorId: vendor.id, messageId: msg.id },
+                "Rate limited: ignoring spam customer",
+              );
+              continue;
+            }
+            
+            // PRODUCTION CHANGE: Queue the message instead of processing immediately
+            // This prevents request pile-up during traffic spikes
+            try {
+              await queueIncomingMessage(
+                vendor.id,
+                msg.from,
+                profileName,
+                msg.text.body,
+              );
+            } catch (err) {
+              logger.error(
+                { err, phone: msg.from, vendorId: vendor.id, messageId: msg.id },
+                "Failed to queue incoming message",
+              );
+            }
           }
         }
       }
+    } catch (err) {
+      logger.error({ err }, "Webhook processing failed");
     }
-  } catch (err) {
-    logger.error({ err }, "Webhook processing failed");
-  }
+  })().catch((err) => {
+    logger.error({ err }, "Unhandled error in webhook background processing");
+  });
+
+  // Response already sent, don't send another
+  return;
 });
 
 // ────────────────────────────────────────────────────────────────────────
@@ -158,7 +186,7 @@ router.post("/webhook/whatsapp", async (req, res) => {
     body: body.data.body,
   });
 
-  res.json({
+  return res.json({
     ok: true,
     botReply: result.botReply,
     conversationId: result.conversation?.id ?? null,
@@ -190,7 +218,7 @@ router.post("/simulator/incoming", async (req, res) => {
     body: body.data.body,
   });
 
-  res.json({
+  return res.json({
     ok: true,
     botReply: result.botReply,
     conversationId: result.conversation?.id ?? null,

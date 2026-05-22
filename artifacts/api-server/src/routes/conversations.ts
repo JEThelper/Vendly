@@ -4,7 +4,7 @@ import {
   conversationsTable,
   messagesTable,
 } from "@workspace/db";
-import { and, eq, desc, asc } from "drizzle-orm";
+import { eq, desc, asc } from "drizzle-orm";
 import {
   ListVendorConversationsParams,
   GetConversationParams,
@@ -25,7 +25,7 @@ router.get("/vendors/:vendorId/conversations", async (req, res) => {
     .from(conversationsTable)
     .where(eq(conversationsTable.vendorId, params.data.vendorId))
     .orderBy(desc(conversationsTable.lastMessageAt));
-  res.json(rows.map((r) => toConversation(r)));
+  return res.json(rows.map((r) => toConversation(r)));
 });
 
 router.get("/conversations/:conversationId", async (req, res) => {
@@ -42,7 +42,7 @@ router.get("/conversations/:conversationId", async (req, res) => {
     .from(messagesTable)
     .where(eq(messagesTable.conversationId, conv.id))
     .orderBy(asc(messagesTable.createdAt));
-  res.json({
+  return res.json({
     ...toConversation(conv),
     messages: messages.map(toMessage),
   });
@@ -65,7 +65,7 @@ router.patch("/conversations/:conversationId", async (req, res) => {
     .where(eq(conversationsTable.id, params.data.conversationId))
     .returning();
   if (!updated) return res.status(404).json({ error: "not_found" });
-  res.json(toConversation(updated));
+  return res.json(toConversation(updated));
 });
 
 router.post("/conversations/:conversationId/messages", async (req, res) => {
@@ -97,6 +97,7 @@ router.post("/conversations/:conversationId/messages", async (req, res) => {
     .update(conversationsTable)
     .set({ lastMessagePreview: preview, lastMessageAt: new Date() })
     .where(eq(conversationsTable.id, conv.id));
+  return res.status(201).json(toMessage(created!));
 
   res.status(201).json(toMessage(created!));
 });

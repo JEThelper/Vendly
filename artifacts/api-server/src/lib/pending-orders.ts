@@ -193,3 +193,17 @@ export async function cleanupAllExpiredPendingOrders(): Promise<number> {
     return 0;
   }
 }
+
+/**
+ * Schedule periodic cleanup of expired pending orders
+ */
+export function scheduleExpiredPendingOrdersCleanup(intervalMs: number = 3600000): NodeJS.Timer {
+  return setInterval(async () => {
+    try {
+      const deleted = await cleanupAllExpiredPendingOrders();
+      logger.debug({ count: deleted }, "Scheduled pending orders cleanup completed");
+    } catch (err) {
+      logger.error({ err }, "Scheduled pending orders cleanup failed");
+    }
+  }, intervalMs);
+}

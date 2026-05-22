@@ -22,7 +22,7 @@ export default function VendorSettings({ vendorId }: { vendorId: string }) {
   const [, navigate] = useLocation();
   const qc = useQueryClient();
   const { toast } = useToast();
-  const { data: vendor } = useGetVendor(vendorId, { query: { enabled: !!vendorId } });
+  const { data: vendor } = useGetVendor(vendorId, { query: { enabled: !!vendorId, queryKey: getGetVendorQueryKey(vendorId) } });
   const updateVendor = useUpdateVendor();
   const deleteVendor = useDeleteVendor();
 
@@ -44,18 +44,18 @@ export default function VendorSettings({ vendorId }: { vendorId: string }) {
   useEffect(() => {
     if (vendor) {
       setForm({
-        name: vendor.name,
-        phoneNumber: vendor.phoneNumber,
+        name: vendor.name || "",
+        phoneNumber: vendor.phoneNumber || "",
         botNumber: vendor.botNumber ?? "",
         adminNumber: vendor.adminNumber ?? "",
         phoneNumberId: vendor.phoneNumberId ?? "",
-        plan: vendor.plan,
-        currency: vendor.currency,
+        plan: vendor.plan || "starter",
+        currency: vendor.currency || "USD",
         bankName: vendor.bankName ?? "",
         bankAccountNumber: vendor.bankAccountNumber ?? "",
         bankAccountHolder: vendor.bankAccountHolder ?? "",
         welcomeMessage: vendor.welcomeMessage ?? "",
-        botEnabled: vendor.botEnabled,
+        botEnabled: vendor.botEnabled ?? true,
       });
     }
   }, [vendor?.id]);
