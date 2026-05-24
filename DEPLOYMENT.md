@@ -1,201 +1,91 @@
-# 🚀 Production Deployment Guide
+# Vercel Deployment Guide
 
-**Status**: Production Ready ✅  
-**Version**: 2.0  
-**Last Updated**: May 22, 2026  
-**Audit Date**: May 22, 2026 (Production Readiness Audit Completed)
+This is a simple, direct guide to deploy `Vendor-Connect-Hub` on Vercel.
 
----
+## 1. Fix the Vercel config
 
-## Table of Contents
+The root `vercel.json` file must define `NODE_ENV` as a string.
 
-1. [Pre-Deployment Checklist](#pre-deployment-checklist)
-2. [Environment Setup](#environment-setup)
-3. [Database Setup](#database-setup)
-4. [Vercel Deployment](#vercel-deployment)
-5. [Post-Deployment Verification](#post-deployment-verification)
-6. [Monitoring & Operations](#monitoring--operations)
-7. [Troubleshooting](#troubleshooting)
+The config is already fixed to:
 
----
-
-## Pre-Deployment Checklist
-
-Before deploying to production, verify all items:
-
-### Infrastructure
-- [ ] PostgreSQL database provisioned (min 2GB RAM, backups configured)
-- [ ] Redis instance running (min 1GB RAM, persistence enabled)
-- [ ] Node.js 18+ installed and verified
-- [ ] SSL certificates obtained (for HTTPS) - auto-managed by Vercel
-- [ ] Domain/DNS configured or use Vercel.com domain
-- [ ] Firewall rules configured (if using custom server)
-
-### External Services
-- [ ] PostgreSQL database created and connection string obtained
-- [ ] Redis instance created and connection URL obtained
-- [ ] Meta WhatsApp Business Account activated
-- [ ] WhatsApp Cloud API access token obtained
-- [ ] Google Gemini API key provisioned (optional, for AI extraction)
-- [ ] Payment gateway configured (if processing payments)
-
-### Code & Build
-- [x] Git repository cloned
-- [x] All environment variables documented in `.env.example`
-- [x] Build tested locally (`pnpm build` succeeds)
-- [x] Type checking passes (`pnpm run typecheck`) ✅ PASSES
-- [x] No TypeScript errors or warnings ✅ STRICT MODE ENABLED
-- [x] No console.log statements in production code ✅ VERIFIED
-- [x] Webhook signature validation implemented ✅ X-Hub-Signature-256
-- [x] Environment variables validated at startup ✅ REQUIRED VARS CHECKED
-
-### Operations
-- [ ] Logging configured (Pino transports set up)
-- [ ] Error tracking configured (Sentry or equivalent)
-- [ ] Monitoring/alerting setup (CPU, memory, database)
-- [ ] Database backup schedule configured
-- [ ] Redis snapshot backups configured
-- [ ] Incident response plan documented
-
----
-
-## Environment Setup
-
-### Step 1: Create .env File
-
-Create `.env` file in root and each service directory:
-
-#### `/Vendor-Connect-Hub/.env`
-```bash
-# Node Environment
-NODE_ENV=production
-
-# API Server
-PORT=3000
-HOST=0.0.0.0
-
-# Database (Supabase PostgreSQL)
-DATABASE_URL=postgresql://[user]:[password]@[host]:[port]/[database]
-DB_POOL_SIZE=20
-DB_POOL_MIN=5
-DB_POOL_TIMEOUT=5000
-
-# Redis (Optional - if not using Supabase Redis)
-REDIS_URL=redis://:password@redis-host:6379/0
-
-# WhatsApp Integration
-WHATSAPP_TOKEN=<your-meta-cloud-api-token>
-WHATSAPP_PHONE_ID=<your-phone-number-id>
-WHATSAPP_BUSINESS_ACCOUNT_ID=<your-business-account-id>
-WHATSAPP_VERIFY_TOKEN=<generate-random-string>
-WHATSAPP_WEBHOOK_URL=https://yourdomain.com/api/webhook
-
-# Google Gemini AI Integration
-GEMINI_API_KEY=<your-google-gemini-api-key>
-GEMINI_MODEL=gemini-1.5-flash
-
-# Logging
-LOG_LEVEL=info
-LOG_FORMAT=json
-
-# Security
-RATE_LIMIT_WINDOW=15m
-RATE_LIMIT_MAX_REQUESTS=1000
-CORS_ORIGIN=https://yourdomain.com
-
-# Optional: Error Tracking
-SENTRY_DSN=<your-sentry-dsn>
-SENTRY_ENVIRONMENT=production
+```json
+{
+  "version": 2,
+  "buildCommand": "pnpm install && pnpm run build",
+  "framework": "other",
+  "env": {
+    "NODE_ENV": "production"
+  },
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/dist/index.mjs",
+      "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/dist/index.mjs"
+    }
+  ],
+  "functions": {
+    "artifacts/api-server/dist/index.mjs": {
+      "maxDuration": 30,
+      "memory": 1024
+    }
+  },
+  "outputDirectory": "artifacts/api-server/dist"
+}
 ```
 
-#### `/artifacts/api-server/.env`
-```bash
-NODE_ENV=production
-PORT=3000
-DATABASE_URL=postgresql://[user]:[password]@[supabase-host]/[database]
-REDIS_URL=redis://...
-WHATSAPP_TOKEN=...
-GEMINI_API_KEY=...
-```
+## 2. Connect your repo to Vercel
 
-#### `/artifacts/control-panel/.env`
-```bash
-PORT=5173
-BASE_PATH=/
-API_BASE_URL=https://yourdomain.com
-VITE_API_URL=https://yourdomain.com
-```
+1. Go to `https://vercel.com` and log in.
+2. Click `New Project`.
+3. Import the GitHub repository `IkechukwuEmmanuel/Automation-Bot`.
+4. Use the root folder `/` as the project root.
+5. Vercel will detect the repo and use the existing `vercel.json` automatically.
 
-### Step 3: Verify Connections
+## 3. Set environment variables in Vercel
+
+Open your Vercel project, then go to `Settings` → `Environment Variables`.
+
+Add these variables for `Production` and `Preview` as needed:
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `VERIFY_TOKEN`
+- `ACCESS_TOKEN`
+- `GEMINI_API_KEY` (optional)
+- `LOG_LEVEL` (optional, e.g. `info`)
+
+You do not need to add `NODE_ENV` here because Vercel already sets it in `vercel.json`.
+
+## 4. Deploy
+
+Once the repo is imported and env vars are set:
+
+- Click `Deploy` in the Vercel dashboard.
+- Or run locally from the repo root:
 
 ```bash
-# Test Supabase PostgreSQL
-psql $DATABASE_URL -c "SELECT 1"
-# Expected: (1 row)
-
-# Test Redis (if configured)
-redis-cli -u $REDIS_URL ping
-# Expected: PONG
-
-# Test Gemini API
-curl -s "https://generativelanguage.googleapis.com/v1/models?key=$GEMINI_API_KEY" | head -20
-# Expected: JSON response with models list
+cd /workspaces/Automation-Bot/Vendor-Connect-Hub
+vercel --prod
 ```
 
----
+## 5. Verify deployment
 
-## Database Setup with Supabase
+After deploy completes:
 
-### Step 1: Supabase Already Has PostgreSQL!
+- Open the Vercel deployment URL.
+- Confirm the site loads.
+- If your API is used, verify `/api/health` or your webhook endpoint returns a response.
 
-Supabase provides a ready-to-use PostgreSQL database. No setup needed!
+## 6. Notes
 
-- ✅ Database already created
-- ✅ Connection string provided in dashboard
-- ✅ Automatic backups enabled
-- ✅ Row-level security available
-
-### Step 2: Run Migrations
-
-```bash
-# Install dependencies
-pnpm install --frozen-lockfile
-
-# Run Drizzle migrations
-cd lib/db
-DATABASE_URL=$DATABASE_URL pnpm run migrate
-# This creates all tables with proper schemas in your Supabase database
-```
-
-### Step 3: Verify Schema in Supabase
-
-You can verify the schema two ways:
-
-**Option 1: Supabase Dashboard**
-- Go to your Supabase project
-- Click "Table Editor" in left sidebar
-- You should see: vendors, menus, menu_items, orders, pending_orders, customers, messages, idempotency_keys
-
-**Option 2: Command Line**
-```bash
-psql $DATABASE_URL -c "\dt"
-# Should show all tables listed above
-```
-
-### Step 4: Create Indexes (Optional, for Performance)
-
-```sql
--- On frequently queried columns
-CREATE INDEX idx_orders_vendor_created ON orders(vendor_id, created_at DESC);
-CREATE INDEX idx_orders_phone ON orders(customer_phone);
-CREATE INDEX idx_messages_conversation ON messages(conversation_id);
-CREATE INDEX idx_idempotency_created ON idempotency_keys(created_at);
-CREATE INDEX idx_menu_items_vendor ON menu_items(vendor_id);
-
--- On foreign keys
-CREATE INDEX idx_pending_orders_vendor ON pending_orders(vendor_id);
-CREATE INDEX idx_customers_vendor_phone ON customers(vendor_id, phone);
-```
+- `buildCommand` is `pnpm install && pnpm run build`.
+- Vercel will build the monorepo from the root.
+- Set secrets in the Vercel dashboard, not in `vercel.json`.
+- The project uses `artifacts/api-server/dist` for server output.
 
 ---
 
