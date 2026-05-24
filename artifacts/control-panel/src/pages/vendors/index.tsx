@@ -1,5 +1,5 @@
 import { Link } from "wouter";
-import { useListVendors } from "@workspace/api-client-react";
+import { useListVendors, type Vendor } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,15 +9,20 @@ import { PlanBadge } from "@/components/plan-badge";
 import { formatDistanceToNow } from "date-fns";
 
 export default function VendorsList() {
-  const { data, isLoading } = useListVendors();
+  const { data, isLoading } = useListVendors<Vendor[]>();
   const [q, setQ] = useState("");
 
   const filtered = useMemo(() => {
-    if (!data) return [];
+    const vendorList = Array.isArray(data)
+      ? data
+      : data && Array.isArray((data as any).vendors)
+      ? (data as any).vendors
+      : [];
+
     const lower = q.trim().toLowerCase();
-    if (!lower) return data;
-    return data.filter(
-      (v) =>
+    if (!lower) return vendorList;
+    return vendorList.filter(
+      (v: Vendor) =>
         v.name.toLowerCase().includes(lower) ||
         v.phoneNumber.toLowerCase().includes(lower),
     );
@@ -60,7 +65,7 @@ export default function VendorsList() {
         <EmptyState hasQuery={!!q} />
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
-          {filtered.map((v) => (
+          {filtered.map((v: Vendor) => (
             <Link key={v.id} href={`/vendors/${v.id}`}>
               <Card className="hover-elevate cursor-pointer transition-all border-border">
                 <CardContent className="p-4 flex items-start justify-between gap-3">

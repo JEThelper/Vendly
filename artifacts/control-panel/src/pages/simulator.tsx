@@ -29,6 +29,11 @@ type Message = {
 
 export default function Simulator() {
   const { data: vendors } = useListVendors();
+  const vendorList = Array.isArray(vendors)
+    ? vendors
+    : vendors && Array.isArray((vendors as any).vendors)
+    ? (vendors as any).vendors
+    : [];
   const send = useSimulateIncomingMessage();
   const customerScrollRef = useRef<HTMLDivElement>(null);
   const vendorScrollRef = useRef<HTMLDivElement>(null);
@@ -41,10 +46,10 @@ export default function Simulator() {
   const [conversationId, setConversationId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!vendorId && vendors && vendors.length > 0) {
-      setVendorId(vendors[0]!.id);
+    if (!vendorId && vendorList.length > 0) {
+      setVendorId(vendorList[0]!.id);
     }
-  }, [vendors, vendorId]);
+  }, [vendorList, vendorId]);
 
   useEffect(() => {
     if (customerScrollRef.current) {
@@ -128,7 +133,7 @@ export default function Simulator() {
     }
   }
 
-  const selectedVendor = vendors?.find((v) => v.id === vendorId);
+  const selectedVendor = vendorList.find((v) => v.id === vendorId);
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -150,7 +155,7 @@ export default function Simulator() {
               <Select value={vendorId} onValueChange={setVendorId}>
                 <SelectTrigger><SelectValue placeholder="Choose a vendor" /></SelectTrigger>
                 <SelectContent>
-                  {vendors?.map((v) => (
+                  {vendorList.map((v) => (
                     <SelectItem key={v.id} value={v.id}>{v.name} ({v.plan})</SelectItem>
                   ))}
                 </SelectContent>

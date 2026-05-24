@@ -19,104 +19,146 @@ export type ExtractedOrder = {
   quantity: number;
 };
 
-/**
- * Attempts to extract order details using Gemini AI.
- * Returns null if:
- * - API key is not set (stub mode)
- * - API call times out (5 second limit)
- * - API fails (circuit breaker protection)
- * - Response is not valid JSON
- * - Response missing required fields
- * - Quantity is invalid
- * 
- * IMPORTANT: This function WILL NOT BLOCK indefinitely.
- * Even if Gemini API hangs, we timeout after 5 seconds and fall back to rule-based.
- */
-export async function aiExtractOrder(text: string): Promise<ExtractedOrder | null> {
-  const client = getGeminiClient();
+export type ExtractedAdminIntent = {
+  intent: string;
+  entities: Record<string, unknown>;
+};
 
-  // Fail safely: no API key = stub mode
+function parseJsonResponse(content: string): unknown {
+  try {
+    return JSON.parse(content);
+  } catch {
+    const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[1]);
+    }
+    throw new Error("Invalid JSON");
+  }
+}
+
+async function runGemini(
+  prompt: string,
+  timeoutMs = 5000,
+): Promise<string | null> {
+  const client = getGeminiClient();
   if (!client) {
     logger.debug("GEMINI_API_KEY not set, skipping AI extraction");
     return null;
   }
 
-  try {
-    // Wrap in timeout promise to ensure we never wait forever
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new Error("AI extraction timeout: exceeded 5 seconds"));
-      }, 5000);
-    });
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error("AI extraction timeout: exceeded 5 seconds"));
+    }, timeoutMs);
+  });
 
-    const model = client.getGenerativeModel({ model: "gemini-1.5-flash" });
-    
+  try {
+    const model = client.getGenerativeModel({ model: "gemini-2.0-flash" });
     const response = await Promise.race([
       model.generateContent({
         contents: [
           {
             role: "user",
-            parts: [
-              {
-                text: `Extract food order details from this message. Return ONLY valid JSON with 'item' (product name) and 'quantity' (number >= 1) fields. Example: {"item": "pizza", "quantity": 2}. If you cannot extract, return null.\n\nMessage: ${text}`,
-              },
-            ],
+            parts: [{ text: prompt }],
           },
         ],
       }),
       timeoutPromise,
     ]);
-
-    const content = response.response.text();
-    if (!content) {
-      logger.debug("AI returned empty response");
-      return null;
+    return response.response.text();
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("timeout")) {
+      logger.warn("AI extraction timeout, falling back");
+    } else {
+      logger.warn({ err }, "AI extraction failed");
     }
+    return null;
+  }
+}
 
-    logger.debug({ aiResponse: content }, "AI extraction response");
+/**
+ * Attempts to extract order details using Gemini AI.
+ * Returns null if the API is unavailable, times out, fails, or returns invalid JSON.
+ */
+export async function aiExtractOrder(
+  text: string,
+): Promise<ExtractedOrder[] | null> {
+  const prompt = `Extract food order details from this message. Return ONLY valid JSON. Use this exact shape:\n{\n  "items": [\n    { "item": "<product name>", "quantity": <integer> }\n  ]\n}\nIf you cannot extract any order items, return null.\n\nMessage: ${text}`;
 
-    // Parse JSON (AI might wrap it in markdown code blocks)
-    let parsed: unknown;
-    try {
-      // Try direct parse first
-      parsed = JSON.parse(content);
-    } catch {
-      // Try extracting from markdown code blocks
-      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (jsonMatch) {
-        parsed = JSON.parse(jsonMatch[1]);
-      } else {
-        throw new Error("Invalid JSON");
-      }
-    }
+  const content = await runGemini(prompt);
+  if (!content) return null;
 
-    // Validate structure
+  logger.debug({ aiResponse: content }, "AI order extraction response");
+
+  try {
+    const parsed = parseJsonResponse(content);
     if (
       !parsed ||
       typeof parsed !== "object" ||
-      !("item" in parsed) ||
-      !("quantity" in parsed)
+      !Array.isArray((parsed as any).items)
     ) {
-      logger.debug({ parsed }, "AI response missing required fields");
+      logger.debug({ parsed }, "AI order response missing items array");
       return null;
     }
 
-    const item = String(parsed.item).trim();
-    const quantity = Number(parsed.quantity);
+    const items = (parsed as any).items;
+    const result: ExtractedOrder[] = [];
 
-    if (!item || quantity < 1 || !Number.isInteger(quantity)) {
-      logger.debug({ item, quantity }, "AI response has invalid values");
-      return null;
+    for (const raw of items) {
+      if (
+        !raw ||
+        typeof raw !== "object" ||
+        typeof raw.item !== "string" ||
+        raw.item.trim() === ""
+      ) {
+        return null;
+      }
+      const quantity = Number(raw.quantity ?? 1);
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        return null;
+      }
+      result.push({ item: raw.item.trim(), quantity });
     }
 
-    return { item, quantity };
+    return result.length > 0 ? result : null;
   } catch (err) {
-    // Check if it's a timeout error
-    if (err instanceof Error && err.message.includes("timeout")) {
-      logger.warn({ text: text.slice(0, 100) }, "AI extraction timeout, using rule-based fallback");
-    } else {
-      logger.warn({ err }, "AI extraction failed, will fallback to rule-based");
+    logger.warn({ err }, "AI order extraction invalid JSON");
+    return null;
+  }
+}
+
+/**
+ * Attempts to extract admin intent and entities using Gemini AI.
+ * Returns null if the API is unavailable, times out, fails, or returns invalid JSON.
+ */
+export async function aiExtractAdminIntent(
+  text: string,
+): Promise<ExtractedAdminIntent | null> {
+  const prompt = `Analyze this vendor message and return ONLY valid JSON in the form {"intent":"<intent>","entities":{...}}. Allowed intents: add_menu_item, remove_menu_item, update_price, mark_unavailable, mark_available, show_menu, confirm_order, reject_order, confirm_payment, switch_human, switch_bot. Use entity names such as itemName, price, orderId, customerPhone. If the intent is unclear, return {"intent":"unknown","entities":{}}. Do not include any extra text.\n\nMessage: ${text}`;
+
+  const content = await runGemini(prompt);
+  if (!content) return null;
+
+  logger.debug({ aiResponse: content }, "AI admin intent response");
+
+  try {
+    const parsed = parseJsonResponse(content);
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof (parsed as any).intent !== "string" ||
+      typeof (parsed as any).entities !== "object"
+    ) {
+      logger.debug({ parsed }, "AI admin intent response invalid shape");
+      return null;
     }
+
+    return {
+      intent: (parsed as any).intent,
+      entities: (parsed as any).entities,
+    };
+  } catch (err) {
+    logger.warn({ err }, "AI admin intent invalid JSON");
     return null;
   }
 }

@@ -1,13 +1,28 @@
-import { db, pendingOrdersTable, MenuItemRow } from "@workspace/db";
+import { db, pendingOrdersTable } from "@workspace/db";
 import { eq, and, lt } from "drizzle-orm";
 import { logger } from "./logger";
+
+type PendingResolvedItem = {
+  menuItemId: string;
+  itemName: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+};
+
+type PendingClarification = {
+  originalText: string;
+  quantity: number;
+  candidates: Array<{ itemId: string; itemName: string; confidence: number }>;
+  remaining: Array<{ text: string; quantity: number }>;
+};
 
 export type PendingOrder = {
   id: string;
   vendorId: string;
   customerPhone: string;
-  item: MenuItemRow;
-  quantity: number;
+  resolvedItems: PendingResolvedItem[];
+  pendingClarification: PendingClarification | null;
   total: number;
   timestamp: Date;
   expiresAt: Date;
@@ -20,12 +35,11 @@ export type PendingOrder = {
 export async function setPendingOrder(
   vendorId: string,
   customerPhone: string,
-  item: MenuItemRow,
-  quantity: number,
+  resolvedItems: PendingResolvedItem[],
+  pendingClarification: PendingClarification | null,
   total: number,
 ): Promise<PendingOrder | null> {
   try {
-    // Delete any existing pending order for this customer
     await db
       .delete(pendingOrdersTable)
       .where(
@@ -35,18 +49,15 @@ export async function setPendingOrder(
         ),
       );
 
-    // Create new pending order with 15-minute expiration
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
     const [created] = await db
       .insert(pendingOrdersTable)
       .values({
         vendorId,
         customerPhone,
-        menuItemId: item.id,
-        itemName: item.name,
-        quantity,
-        unitPrice: item.price,
+        resolvedItems,
+        pendingClarification,
         total: total.toString(),
         createdAt: new Date(),
         expiresAt,
@@ -59,8 +70,8 @@ export async function setPendingOrder(
       id: created.id,
       vendorId: created.vendorId,
       customerPhone: created.customerPhone,
-      item,
-      quantity: created.quantity,
+      resolvedItems: created.resolvedItems,
+      pendingClarification: created.pendingClarification,
       total: Number(created.total),
       timestamp: created.createdAt,
       expiresAt: created.expiresAt,
@@ -103,17 +114,12 @@ export async function getPendingOrder(
       return null;
     }
 
-    // Return with menu item data
     return {
       id: pending.id,
       vendorId: pending.vendorId,
       customerPhone: pending.customerPhone,
-      item: {
-        id: pending.menuItemId,
-        name: pending.itemName,
-        price: pending.unitPrice,
-      } as MenuItemRow,
-      quantity: pending.quantity,
+      resolvedItems: pending.resolvedItems,
+      pendingClarification: pending.pendingClarification,
       total: Number(pending.total),
       timestamp: pending.createdAt,
       expiresAt: pending.expiresAt,

@@ -21,6 +21,9 @@ export const menuItemsTable = pgTable("menu_items", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export type MenuItemRow = typeof menuItemsTable.$inferSelect;

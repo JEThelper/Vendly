@@ -1,8 +1,9 @@
 # 🚀 Production Deployment Guide
 
 **Status**: Production Ready ✅  
-**Version**: 1.0  
-**Last Updated**: May 19, 2026
+**Version**: 2.0  
+**Last Updated**: May 22, 2026  
+**Audit Date**: May 22, 2026 (Production Readiness Audit Completed)
 
 ---
 
@@ -11,7 +12,7 @@
 1. [Pre-Deployment Checklist](#pre-deployment-checklist)
 2. [Environment Setup](#environment-setup)
 3. [Database Setup](#database-setup)
-4. [Deployment Steps](#deployment-steps)
+4. [Vercel Deployment](#vercel-deployment)
 5. [Post-Deployment Verification](#post-deployment-verification)
 6. [Monitoring & Operations](#monitoring--operations)
 7. [Troubleshooting](#troubleshooting)
@@ -26,26 +27,27 @@ Before deploying to production, verify all items:
 - [ ] PostgreSQL database provisioned (min 2GB RAM, backups configured)
 - [ ] Redis instance running (min 1GB RAM, persistence enabled)
 - [ ] Node.js 18+ installed and verified
-- [ ] SSL certificates obtained (for HTTPS)
-- [ ] Domain/DNS configured
-- [ ] Firewall rules configured (ports 3000, 5173 exposed only to needed services)
+- [ ] SSL certificates obtained (for HTTPS) - auto-managed by Vercel
+- [ ] Domain/DNS configured or use Vercel.com domain
+- [ ] Firewall rules configured (if using custom server)
 
 ### External Services
-- [ ] Supabase project created (PostgreSQL database)
-- [ ] Supabase database connection string obtained
+- [ ] PostgreSQL database created and connection string obtained
+- [ ] Redis instance created and connection URL obtained
 - [ ] Meta WhatsApp Business Account activated
-- [ ] WhatsApp Cloud API tokens obtained and tested
-- [ ] Google Gemini API key provisioned with sufficient quota
-- [ ] API rate limits understood and configured
+- [ ] WhatsApp Cloud API access token obtained
+- [ ] Google Gemini API key provisioned (optional, for AI extraction)
 - [ ] Payment gateway configured (if processing payments)
 
 ### Code & Build
-- [ ] Git repository cloned
-- [ ] All environment variables documented
-- [ ] Build tested locally (`npm run build` succeeds)
-- [ ] Type checking passes (`npm run typecheck`)
-- [ ] No TypeScript errors or warnings
-- [ ] No debug logs or console.log statements remaining
+- [x] Git repository cloned
+- [x] All environment variables documented in `.env.example`
+- [x] Build tested locally (`pnpm build` succeeds)
+- [x] Type checking passes (`pnpm run typecheck`) ✅ PASSES
+- [x] No TypeScript errors or warnings ✅ STRICT MODE ENABLED
+- [x] No console.log statements in production code ✅ VERIFIED
+- [x] Webhook signature validation implemented ✅ X-Hub-Signature-256
+- [x] Environment variables validated at startup ✅ REQUIRED VARS CHECKED
 
 ### Operations
 - [ ] Logging configured (Pino transports set up)
@@ -280,6 +282,98 @@ Platform-specific deployment varies. General flow:
 3. Push to main branch → auto-deploy
 4. Verify with health endpoint
 
+### Option 4: Vercel Deployment (Recommended for Serverless) ⭐
+
+Vercel is optimized for Node.js serverless deployment.
+
+#### Step 1: Connect Repository to Vercel
+
+1. Go to [Vercel Dashboard](https://vercel.com/dashboard)
+2. Click "Add New..." → "Project"
+3. Import your GitHub repository
+4. Select root directory: `/Vendor-Connect-Hub`
+5. Click "Deploy"
+
+#### Step 2: Configure Environment Variables
+
+After importing, go to **Project Settings** → **Environment Variables** and add:
+
+```bash
+# Node & Server
+NODE_ENV=production
+PORT=3000
+
+# Database (PostgreSQL)
+DATABASE_URL=postgresql://user:password@host:5432/database
+
+# Cache & Queue (Redis)
+REDIS_URL=redis://:password@host:6379
+
+# WhatsApp Integration (CRITICAL)
+VERIFY_TOKEN=<generate-strong-random-string>
+ACCESS_TOKEN=<your-meta-whatsapp-access-token>
+
+# Optional: AI Extraction
+GEMINI_API_KEY=<your-google-api-key>
+
+# Logging
+LOG_LEVEL=info
+```
+
+⚠️ **IMPORTANT:** `VERIFY_TOKEN` and `ACCESS_TOKEN` should NOT be in git. Generate them in Vercel dashboard only.
+
+#### Step 3: Configure Build & Output
+
+Vercel should auto-detect:
+- **Build Command:** `pnpm install && pnpm run build`
+- **Output Directory:** `artifacts/api-server/dist`
+
+If not auto-detected, manually set in **Project Settings** → **Build & Development Settings**
+
+#### Step 4: Deploy
+
+Vercel will automatically:
+1. ✅ Install dependencies
+2. ✅ Run `tsc --noEmit` (TypeScript check)
+3. ✅ Run `pnpm run build` (esbuild compilation)
+4. ✅ Deploy to serverless functions
+
+**Expected build time:** 2-5 minutes
+
+#### Step 5: Get Your Deployment URL
+
+After successful deployment:
+- Your API will be available at: `https://your-project.vercel.app`
+- All requests to `/api/*` will route to the Node.js server
+
+#### Step 6: Update Meta Webhook URL
+
+1. Go to Meta Business Platform
+2. Navigate to WhatsApp → Configuration
+3. Set Webhook URL to: `https://your-project.vercel.app/api/webhook/messages`
+4. Set Verify Token to: the `VERIFY_TOKEN` you set in Vercel (not the git value!)
+5. Click "Verify and Save"
+
+#### Step 7: Verify Deployment
+
+```bash
+# Test health endpoint
+curl https://your-project.vercel.app/api/health
+
+# Test webhook verification
+curl "https://your-project.vercel.app/api/webhook/messages?hub.mode=subscribe&hub.verify_token=YOUR_VERIFY_TOKEN&hub.challenge=test"
+# Expected: HTTP 200 with "test" returned
+```
+
+**Vercel Advantages:**
+- ✅ Auto-scaling (handles traffic spikes)
+- ✅ Global CDN (low latency)
+- ✅ Automatic HTTPS
+- ✅ Environment variables protected
+- ✅ Automatic deployments on git push
+- ✅ Built-in monitoring & logs
+- ✅ One-click rollbacks
+
 ---
 
 ## Post-Deployment Verification
@@ -287,33 +381,44 @@ Platform-specific deployment varies. General flow:
 ### Step 1: Verify Services Running
 
 ```bash
-# Check API server
-curl http://localhost:3000/api/health
+# Check API server health (replace with your URL)
+curl https://your-deployment-url/api/health
 # Expected response:
 # {
 #   "status": "ok",
-#   "timestamp": "2026-05-19T...",
+#   "timestamp": "2026-05-22T...",
 #   "database": {"ok": true, ...},
 #   "redis": {"ok": true, ...}
 # }
 
-# Check frontend
-curl http://localhost:5173
-# Expected: HTML response
+# For Vercel:
+curl https://your-project.vercel.app/api/health
 ```
 
 ### Step 2: Test WhatsApp Webhook
 
 ```bash
-# 1. Get webhook token from .env
-VERIFY_TOKEN=$(grep WHATSAPP_VERIFY_TOKEN .env | cut -d= -f2)
+# 1. Get webhook token from environment
+VERIFY_TOKEN="<your-verify-token>"
 
 # 2. Simulate Meta webhook verification
-curl "http://localhost:3000/api/webhook?hub.mode=subscribe&hub.verify_token=$VERIFY_TOKEN&hub.challenge=test_challenge"
-# Expected: HTTP 200 with "test_challenge" in response
+curl "https://your-deployment-url/api/webhook/messages?hub.mode=subscribe&hub.verify_token=$VERIFY_TOKEN&hub.challenge=test_challenge"
+# Expected: HTTP 200 with "test_challenge" returned
 
-# 3. Send test message
-curl -X POST http://localhost:3000/api/webhook \
+# 3. Verify webhook signature validation (send with invalid signature)
+curl -X POST https://your-deployment-url/api/webhook/messages \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: sha256=invalid" \
+  -d '{"entry":[]}' 
+# Expected: HTTP 403 Forbidden (signature rejected)
+```
+
+### Step 3: Send Test Message Through Webhook
+
+```bash
+# This requires proper X-Hub-Signature-256 header (see webhook-signature.ts for format)
+# For testing, use the simulator endpoint instead:
+curl -X POST https://your-deployment-url/api/simulator/incoming \
   -H "Content-Type: application/json" \
   -d '{
     "object": "whatsapp_business_account",

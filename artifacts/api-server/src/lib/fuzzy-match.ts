@@ -54,54 +54,59 @@ export function findBestMenuMatch(
   const results = fuse.search(itemName);
 
   if (results.length === 0) {
-    logger.debug({ itemName }, "No menu match found, suggesting alternatives");
-    // Return first 3 items as suggestions
+    logger.debug({ itemName }, "No menu match found");
     return {
       kind: "none",
-      suggestions: menuItems.slice(0, 3),
+      suggestions: [],
     };
   }
 
-  // Single result
-  if (results.length === 1) {
-    const confidence = 1 - (results[0].score ?? 1);
-    logger.debug(
-      { itemName, matchedItem: results[0].item.name, confidence },
-      "Fuzzy menu match",
-    );
-    return { kind: "unique", item: results[0].item, confidence };
+  const similarity = (score: number | null | undefined) => Math.max(0, 1 - (score ?? 1));
+  const topResult = results[0];
+  const topScore = similarity(topResult.score);
+
+  if (topScore < 0.4) {
+    logger.debug({ itemName, bestScore: topScore }, "No menu match with sufficient confidence");
+    return { kind: "none", suggestions: [] };
   }
 
-  // Multiple results: check if they're too close
-  const bestScore = results[0].score ?? 1;
-  const closeMatches = results.filter((r) => Math.abs((r.score ?? 1) - bestScore) < 0.05);
+  const closeMatches = results
+    .map((result) => ({ item: result.item, similarity: similarity(result.score) }))
+    .filter((result) => result.similarity >= 0.4)
+    .slice(0, 5);
 
-  if (closeMatches.length > 1) {
-    const confidence = 1 - bestScore;
+  if (topScore >= 0.7 && closeMatches.length === 1) {
+    logger.debug(
+      { itemName, matchedItem: topResult.item.name, confidence: topScore },
+      "Best fuzzy menu match",
+    );
+    return { kind: "unique", item: topResult.item, confidence: topScore };
+  }
+
+  const ambiguousOptions = closeMatches
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, 3)
+    .map((result) => result.item);
+
+  if (closeMatches.length > 1 || topScore < 0.7) {
     logger.debug(
       {
         itemName,
-        topMatches: closeMatches.map((m) => m.item.name),
-        confidence,
+        topMatches: ambiguousOptions.map((m) => m.name),
+        confidence: topScore,
       },
       "Ambiguous menu match",
     );
-
-    // If confidence is low, ask for disambiguation
-    if (confidence < 0.7) {
-      return {
-        kind: "ambiguous",
-        options: closeMatches.slice(0, 3).map((m) => m.item),
-        confidence,
-      };
-    }
+    return {
+      kind: "ambiguous",
+      options: ambiguousOptions,
+      confidence: topScore,
+    };
   }
 
-  // Return best match
-  const confidence = 1 - bestScore;
   logger.debug(
-    { itemName, matchedItem: results[0].item.name, confidence },
+    { itemName, matchedItem: topResult.item.name, confidence: topScore },
     "Best fuzzy menu match",
   );
-  return { kind: "unique", item: results[0].item, confidence };
+  return { kind: "unique", item: topResult.item, confidence: topScore };
 }

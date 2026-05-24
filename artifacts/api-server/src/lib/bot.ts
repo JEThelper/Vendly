@@ -18,7 +18,7 @@ import { and, eq, sql, desc, gte } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./whatsapp";
 import { logger } from "./logger";
 import { hasFeature } from "./plans";
-import { aiExtractOrder } from "./ai-extractor";
+import { aiExtractOrder, aiExtractAdminIntent, type ExtractedAdminIntent } from "./ai-extractor";
 import {
   setPendingOrder,
   getPendingOrder,
@@ -147,14 +147,197 @@ async function buildMenuMessage(vendor: VendorRow): Promise<string> {
 //   "1"               -> 1× item #1
 //   "1x2"  /  "1 x 2" -> 2× item #1
 //   "1, 3x2, 5"       -> mixed
-//   "order margherita x2"  -> by name (legacy)
-//   "2 margherita"    -> 2× margherita (qty-first)
+//   "order margherita x2"  -> by name
+//   "2 margherita"    -> 2× margherita
+//   "I need one plate of jellof rice" -> fuzzy name parsing
+
 type ParsedItem =
   | { kind: "number"; index: number; quantity: number }
   | { kind: "name"; name: string; quantity: number };
 
+type OrderResolution =
+  | { type: "resolved"; item: MenuItemRow; quantity: number }
+  | {
+      type: "ambiguous";
+      originalText: string;
+      quantity: number;
+      candidates: Array<{ item: MenuItemRow; confidence: number }>;
+    }
+  | { type: "not_found"; originalText: string; quantity: number }
+  | { type: "unavailable"; item: MenuItemRow; quantity: number };
+
+type OrderSummaryItem = {
+  name: string;
+  unitPrice: number;
+  quantity: number;
+};
+
+function isUnavailableResolution(
+  res: OrderResolution,
+): res is { type: "unavailable"; item: MenuItemRow; quantity: number } {
+  return res.type === "unavailable";
+}
+
+function isAmbiguousResolution(
+  res: OrderResolution,
+): res is {
+  type: "ambiguous";
+  originalText: string;
+  quantity: number;
+  candidates: Array<{ item: MenuItemRow; confidence: number }>;
+} {
+  return res.type === "ambiguous";
+}
+
+function isNotFoundResolution(
+  res: OrderResolution,
+): res is { type: "not_found"; originalText: string; quantity: number } {
+  return res.type === "not_found";
+}
+
+function toPendingResolvedItem(
+  resolved: { item: MenuItemRow; quantity: number },
+): PendingResolvedItem {
+  return {
+    menuItemId: resolved.item.id,
+    itemName: resolved.item.name,
+    quantity: resolved.quantity,
+    unitPrice: Number(resolved.item.price),
+    total: Number(resolved.item.price) * resolved.quantity,
+  };
+}
+
+function orderSummaryFromPendingResolvedItems(
+  orderItems: PendingResolvedItem[],
+): OrderSummaryItem[] {
+  return orderItems.map((resolved) => ({
+    name: resolved.itemName,
+    unitPrice: resolved.unitPrice,
+    quantity: resolved.quantity,
+  }));
+}
+
+function orderSummaryFromResolvedItems(
+  orderItems: Array<{ item: MenuItemRow; quantity: number }>,
+): OrderSummaryItem[] {
+  return orderItems.map((resolved) => ({
+    name: resolved.item.name,
+    unitPrice: Number(resolved.item.price),
+    quantity: resolved.quantity,
+  }));
+}
+
+async function findOrderByShortId(vendorId: string, shortId: string): Promise<OrderRow | null> {
+  if (!shortId) return null;
+  const [order] = await db
+    .select()
+    .from(ordersTable)
+    .where(
+      and(
+        eq(ordersTable.vendorId, vendorId),
+        sql`${ordersTable.id} LIKE ${shortId}%`,
+      ),
+    )
+    .limit(1);
+  return order ?? null;
+}
+
+async function findLatestPendingOrder(vendorId: string): Promise<OrderRow | null> {
+  const [order] = await db
+    .select()
+    .from(ordersTable)
+    .where(
+      and(
+        eq(ordersTable.vendorId, vendorId),
+        eq(ordersTable.status, "pending"),
+      ),
+    )
+    .orderBy(desc(ordersTable.createdAt))
+    .limit(1);
+  return order ?? null;
+}
+
+async function findLatestConfirmedOrder(vendorId: string): Promise<OrderRow | null> {
+  const [order] = await db
+    .select()
+    .from(ordersTable)
+    .where(
+      and(
+        eq(ordersTable.vendorId, vendorId),
+        eq(ordersTable.status, "confirmed"),
+      ),
+    )
+    .orderBy(desc(ordersTable.createdAt))
+    .limit(1);
+  return order ?? null;
+}
+
+async function notifyCustomer(
+  vendor: VendorRow,
+  customerPhone: string,
+  text: string,
+): Promise<void> {
+  const conversation = await findOrCreateConversation(vendor, customerPhone, "Customer");
+  await recordMessage(conversation.id, "out", "bot", text);
+  await sendWhatsAppMessage({
+    phoneNumberId: vendor.phoneNumberId,
+    to: customerPhone,
+    text,
+  });
+}
+
+function pendingResolvedItemToOrderItem(
+  resolved: PendingResolvedItem,
+): { item: MenuItemRow; quantity: number } {
+  return {
+    item: {
+      id: resolved.menuItemId,
+      vendorId: "",
+      name: resolved.itemName,
+      price: resolved.unitPrice.toString(),
+      available: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      category: null,
+      description: null,
+    } as MenuItemRow,
+    quantity: resolved.quantity,
+  };
+}
+
+type OrderItem = {
+  name: string;
+  unitPrice: number;
+  quantity: number;
+};
+
+type PendingResolvedItem = {
+  menuItemId: string;
+  itemName: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+};
+
+async function listAllMenuItems(vendor: VendorRow): Promise<MenuItemRow[]> {
+  return db
+    .select()
+    .from(menuItemsTable)
+    .where(eq(menuItemsTable.vendorId, vendor.id))
+    .orderBy(menuItemsTable.category, menuItemsTable.createdAt);
+}
+
+
+function normalizeOrderText(body: string): string {
+  return body
+    .replace(/[,;]+/g, ",")
+    .replace(/\b(?:please|pls|abeg|i need|need|i want|want|give me|can i get|i'd like|id like|may i have|would like|for me|kindly)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function parseOrderLine(body: string): ParsedItem[] {
-  const text = body.replace(/^order\s+/i, "").trim();
+  const text = normalizeOrderText(body).replace(/^order\s+/i, "").trim();
   if (!text) return [];
   const parts = text
     .split(/[,;\n]| and /i)
@@ -162,7 +345,6 @@ function parseOrderLine(body: string): ParsedItem[] {
     .filter(Boolean);
   const result: ParsedItem[] = [];
   for (const part of parts) {
-    // Pure number forms: "3", "3x2", "3 x 2", "3*2"
     const numMatch = part.match(/^(\d+)\s*(?:[x×*]\s*(\d+))?$/i);
     if (numMatch) {
       const index = parseInt(numMatch[1]!, 10);
@@ -172,7 +354,7 @@ function parseOrderLine(body: string): ParsedItem[] {
         continue;
       }
     }
-    // "<qty> <name>" e.g. "2 margherita"
+
     const qtyFirst = part.match(/^(\d+)\s+(.+)$/);
     if (qtyFirst) {
       const qty = parseInt(qtyFirst[1]!, 10);
@@ -182,28 +364,534 @@ function parseOrderLine(body: string): ParsedItem[] {
         continue;
       }
     }
-    // "<name> x<qty>" or just "<name>"
+
     const nameMatch = part.match(/^(.*?)(?:\s*[x×*]\s*(\d+))?$/i);
     if (nameMatch) {
       const name = nameMatch[1]!.trim();
       const qty = nameMatch[2] ? parseInt(nameMatch[2]!, 10) : 1;
-      if (name && qty > 0) result.push({ kind: "name", name, quantity: qty });
+      if (name && qty > 0) {
+        result.push({ kind: "name", name, quantity: qty });
+      }
     }
   }
   return result;
 }
 
-// Detects "order intent" without false positives on chit-chat.
-// Triggers on: explicit "order" prefix, anything that looks like a number-pick
-// ("1", "1x2", "1,2,3"), or qty markers ("x2").
 function looksLikeOrder(body: string): boolean {
   const trimmed = body.trim();
   if (startsWithAny(trimmed, orderTriggers)) return true;
   if (/^[\d, x×*]+$/i.test(trimmed)) return true;
   if (/\b[x×]\s?\d+\b/i.test(trimmed)) return true;
+  if (/\b(?:rice|chicken|burger|shawarma|plate|piece|meal|order|want|need)\b/i.test(trimmed)) {
+    return true;
+  }
   return false;
 }
 
+function buildOrderSummary(vendor: VendorRow, orderItems: OrderItem[]): string {
+  const total = orderItems.reduce(
+    (sum, item) => sum + item.unitPrice * item.quantity,
+    0,
+  );
+  const lines = ["*Order summary*", ""];
+  for (const resolved of orderItems) {
+    lines.push(
+      `- ${resolved.quantity}× ${resolved.name} — ${formatMoney(
+        resolved.unitPrice * resolved.quantity,
+        vendor.currency,
+      )}`,
+    );
+  }
+  lines.push("", `Total: *${formatMoney(total, vendor.currency)}*`);
+  return lines.join("\n");
+}
+
+function formatClarificationOptions(candidates: Array<{ item: MenuItemRow; confidence: number }>) {
+  return candidates
+    .slice(0, 3)
+    .map((candidate, index) => `*${index + 1}*: ${candidate.item.name}`)
+    .join("\n");
+}
+
+function isAffirmative(body: string): boolean {
+  const normalized = body.trim().toLowerCase();
+  return ["yes", "y", "sure", "yeah", "yep", "please do", "okay", "ok", "confirm"].includes(normalized);
+}
+
+function isNegative(body: string): boolean {
+  const normalized = body.trim().toLowerCase();
+  return ["no", "n", "nah", "nope", "cancel", "stop", "not now"].includes(normalized);
+}
+
+
+async function buildPendingOrderState(
+  vendor: VendorRow,
+  conversation: ConversationRow,
+  body: string,
+): Promise<BotReply> {
+  const activeItems = await listActiveMenuItems(vendor);
+  const allItems = await listAllMenuItems(vendor);
+  if (activeItems.length === 0) {
+    return {
+      text: `Our menu is being updated. Please check back soon.`,
+      handover: false,
+    };
+  }
+
+  const parsed = parseOrderLine(body);
+  let requests = parsed;
+  if (requests.length === 0) {
+    const aiItems = await aiExtractOrder(body);
+    if (aiItems) {
+      requests = aiItems.map((order) => ({ kind: "name", name: order.item, quantity: order.quantity }));
+    }
+  }
+
+  if (requests.length === 0) {
+    return {
+      text: `I didn't catch your order. Reply with the item name or say *menu* to see what's available.`,
+      handover: false,
+    };
+  }
+
+  const resolvedItems: Array<{ item: MenuItemRow; quantity: number }> = [];
+  const unresolved: Array<{ text: string; quantity: number; resolution: OrderResolution }> = [];
+
+  for (const request of requests) {
+    const result = resolveOrderRequest(request, activeItems, allItems);
+    if (result.type === "resolved") {
+      resolvedItems.push({ item: result.item, quantity: request.quantity });
+      continue;
+    }
+    unresolved.push({
+      text: request.kind === "name" ? request.name : `${request.index}`,
+      quantity: request.quantity,
+      resolution: result,
+    });
+  }
+
+  const unavailable = unresolved.filter(
+    (item): item is { text: string; quantity: number; resolution: { type: "unavailable"; item: MenuItemRow; quantity: number } } =>
+      isUnavailableResolution(item.resolution),
+  );
+  const ambiguous = unresolved.filter(
+    (item): item is { text: string; quantity: number; resolution: { type: "ambiguous"; originalText: string; quantity: number; candidates: Array<{ item: MenuItemRow; confidence: number }> } } =>
+      isAmbiguousResolution(item.resolution),
+  );
+  const notFound = unresolved.filter(
+    (item): item is { text: string; quantity: number; resolution: { type: "not_found"; originalText: string; quantity: number } } =>
+      isNotFoundResolution(item.resolution),
+  );
+
+  if (unavailable.length > 0 && resolvedItems.length === 0 && ambiguous.length === 0 && notFound.length === 0) {
+    return {
+      text: `Sorry, ${unavailable[0].resolution.item.name} is currently unavailable. Reply *menu* to choose something else.`,
+      handover: false,
+    };
+  }
+
+  const total = resolvedItems.reduce(
+    (sum, item) => sum + Number(item.item.price) * item.quantity,
+    0,
+  );
+
+  if (ambiguous.length > 0) {
+    const first = ambiguous[0].resolution;
+    const remaining = ambiguous.slice(1).map((item) => ({ text: item.text, quantity: item.quantity }))
+      .concat(notFound.map((item) => ({ text: item.text, quantity: item.quantity })))
+      .concat(unavailable.map((item) => ({ text: item.resolution.item.name, quantity: item.quantity })));
+
+    const pending = await setPendingOrder(
+      vendor.id,
+      conversation.customerPhone ?? "unknown",
+      resolvedItems.map((resolved) => ({
+        menuItemId: resolved.item.id,
+        itemName: resolved.item.name,
+        quantity: resolved.quantity,
+        unitPrice: Number(resolved.item.price),
+        total: Number(resolved.item.price) * resolved.quantity,
+      })),
+      {
+        originalText: first.originalText,
+        quantity: first.quantity,
+        candidates: first.candidates.map((candidate) => ({
+          itemId: candidate.item.id,
+          itemName: candidate.item.name,
+          confidence: candidate.confidence,
+        })),
+        remaining,
+      },
+      total,
+    );
+
+    if (!pending) {
+      return {
+        text: `Sorry, I couldn't save your order yet. Please try again.`,
+        handover: false,
+      };
+    }
+
+    const options = formatClarificationOptions(first.candidates);
+    return {
+      text: `I found a few matches for "${first.originalText}":
+
+${options}
+
+Reply with the number for the item you want.`,
+      handover: false,
+    };
+  }
+
+  if (notFound.length > 0) {
+    if (resolvedItems.length === 0) {
+      return {
+        text: `I couldn't match "${notFound[0].text}". Reply with a different item or say *menu* to view the menu.`,
+        handover: false,
+      };
+    }
+
+    const remaining = notFound.slice(1).map((item) => ({ text: item.text, quantity: item.quantity }));
+    const pending = await setPendingOrder(
+      vendor.id,
+      conversation.customerPhone ?? "unknown",
+      resolvedItems.map((resolved) => ({
+        menuItemId: resolved.item.id,
+        itemName: resolved.item.name,
+        quantity: resolved.quantity,
+        unitPrice: Number(resolved.item.price),
+        total: Number(resolved.item.price) * resolved.quantity,
+      })),
+      {
+        originalText: notFound[0].text,
+        quantity: notFound[0].quantity,
+        candidates: [],
+        remaining,
+      },
+      total,
+    );
+
+    if (!pending) {
+      return {
+        text: `Sorry, I couldn't save your order yet. Please try again.`,
+        handover: false,
+      };
+    }
+
+    return {
+      text: `I couldn't find "${notFound[0].text}". Reply YES to continue with the other item${
+        resolvedItems.length === 1 ? "" : "s"
+      }, or NO to start over.`,
+      handover: false,
+    };
+  }
+
+  if (unavailable.length > 0) {
+    const firstUnavailable = unavailable[0];
+    const remaining = unavailable.slice(1).map((item) => ({ text: item.resolution.item.name, quantity: item.quantity }));
+    if (resolvedItems.length === 0 && remaining.length === 0) {
+      return {
+        text: `Sorry, ${firstUnavailable.resolution.item.name} is currently unavailable. Reply *menu* for other options.`,
+        handover: false,
+      };
+    }
+
+    const pending = await setPendingOrder(
+      vendor.id,
+      conversation.customerPhone ?? "unknown",
+      resolvedItems.map((resolved) => ({
+        menuItemId: resolved.item.id,
+        itemName: resolved.item.name,
+        quantity: resolved.quantity,
+        unitPrice: Number(resolved.item.price),
+        total: Number(resolved.item.price) * resolved.quantity,
+      })),
+      {
+        originalText: firstUnavailable.resolution.item.name,
+        quantity: firstUnavailable.quantity,
+        candidates: [],
+        remaining,
+      },
+      total,
+    );
+
+    if (!pending) {
+      return {
+        text: `Sorry, I couldn't save your order yet. Please try again.`,
+        handover: false,
+      };
+    }
+
+    return {
+      text: `Sorry, ${firstUnavailable.resolution.item.name} is currently unavailable. Reply YES to continue with the rest of your order, or NO to start over.`,
+      handover: false,
+    };
+  }
+
+  const pending = await setPendingOrder(
+    vendor.id,
+    conversation.customerPhone ?? "unknown",
+    resolvedItems.map((resolved) => ({
+      menuItemId: resolved.item.id,
+      itemName: resolved.item.name,
+      quantity: resolved.quantity,
+      unitPrice: Number(resolved.item.price),
+      total: Number(resolved.item.price) * resolved.quantity,
+    })),
+    null,
+    total,
+  );
+
+  if (!pending) {
+    return {
+      text: `Sorry, something went wrong while I prepared your order. Try again in a moment.`,
+      handover: false,
+    };
+  }
+
+  return {
+    text: `${buildOrderSummary(vendor, orderSummaryFromResolvedItems(resolvedItems))}
+
+Reply YES to confirm or NO to cancel.`,
+    handover: false,
+  };
+}
+
+function findBestCandidateMatch(
+  body: string,
+  options: Array<{ itemId: string; itemName: string; confidence: number }>,
+) {
+  const choice = parseInt(body.trim(), 10);
+  if (!Number.isNaN(choice) && choice >= 1 && choice <= options.length) {
+    return options[choice - 1];
+  }
+
+  const normalized = body.trim().toLowerCase();
+  return options.find((option) => option.itemName.toLowerCase() === normalized) ?? null;
+}
+
+async function resolvePendingClarification(
+  vendor: VendorRow,
+  conversation: ConversationRow,
+  body: string,
+  pendingOrder: NonNullable<Awaited<ReturnType<typeof getPendingOrder>>>,
+): Promise<BotReply | null> {
+  if (!pendingOrder.pendingClarification) return null;
+
+  const activeItems = await listActiveMenuItems(vendor);
+  const allItems = await listAllMenuItems(vendor);
+  const state = pendingOrder.pendingClarification;
+  const trimmed = body.trim();
+
+  if (state.candidates.length > 0) {
+    const selectedRef = findBestCandidateMatch(trimmed, state.candidates);
+    if (selectedRef) {
+      const selected = allItems.find((item) => item.id === selectedRef.itemId);
+      if (!selected || !selected.available) {
+        await clearPendingOrder(vendor.id, conversation.customerPhone ?? "unknown");
+        return {
+          text: `Sorry, ${selectedRef.itemName} is not available anymore. Please start again with *menu*.`,
+          handover: false,
+        };
+      }
+
+      const resolvedItems = [
+        ...pendingOrder.resolvedItems,
+        toPendingResolvedItem({ item: selected, quantity: state.quantity }),
+      ];
+
+      if (state.remaining.length === 0) {
+        const total = resolvedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+        await setPendingOrder(vendor.id, conversation.customerPhone ?? "unknown", resolvedItems, null, total);
+        return {
+          text: `${buildOrderSummary(vendor, orderSummaryFromPendingResolvedItems(resolvedItems))}
+
+Reply YES to confirm or NO to cancel.`,
+          handover: false,
+        };
+      }
+
+      const nextRequest = state.remaining.shift()!;
+      const nextResolution = resolveOrderRequest({ kind: "name", name: nextRequest.text, quantity: nextRequest.quantity }, activeItems, allItems);
+      return await handleNextPendingResolution(vendor, conversation, resolvedItems, nextRequest, nextResolution, state.remaining);
+    }
+
+    return {
+      text: `Please reply with a number from the list, or say NO to start over.`,
+      handover: false,
+    };
+  }
+
+  if (isNegative(body)) {
+    await clearPendingOrder(vendor.id, conversation.customerPhone ?? "unknown");
+    return {
+      text: `No problem. Send your order again when you're ready.`,
+      handover: false,
+    };
+  }
+
+  if (isAffirmative(body)) {
+    if (pendingOrder.resolvedItems.length === 0) {
+      await clearPendingOrder(vendor.id, conversation.customerPhone ?? "unknown");
+      return {
+        text: `Okay. Reply *menu* when you want to start a new order.`,
+        handover: false,
+      };
+    }
+    const total = pendingOrder.resolvedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+    await setPendingOrder(vendor.id, conversation.customerPhone ?? "unknown", pendingOrder.resolvedItems, null, total);
+    return {
+      text: `${buildOrderSummary(vendor, orderSummaryFromPendingResolvedItems(pendingOrder.resolvedItems))}
+
+Reply YES to confirm or NO to cancel.`,
+      handover: false,
+    };
+  }
+
+  return {
+    text: `I didn't understand that. Reply YES to continue with the order, or NO to cancel.`,
+    handover: false,
+  };
+}
+
+async function handleNextPendingResolution(
+  vendor: VendorRow,
+  conversation: ConversationRow,
+  resolvedItems: PendingResolvedItem[],
+  nextRequest: { text: string; quantity: number },
+  nextResolution: OrderResolution,
+  remaining: Array<{ text: string; quantity: number }>,
+): Promise<BotReply> {
+  if (nextResolution.type === "resolved") {
+    const nextResolvedItems = [
+      ...resolvedItems,
+      toPendingResolvedItem({ item: nextResolution.item, quantity: nextRequest.quantity }),
+    ];
+    const total = nextResolvedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+    await setPendingOrder(vendor.id, conversation.customerPhone ?? "unknown", nextResolvedItems, null, total);
+    return {
+      text: `${buildOrderSummary(vendor, orderSummaryFromPendingResolvedItems(nextResolvedItems))}
+
+Reply YES to confirm or NO to cancel.`,
+      handover: false,
+    };
+  }
+
+  if (nextResolution.type === "ambiguous") {
+    const pending = await setPendingOrder(vendor.id, conversation.customerPhone ?? "unknown", resolvedItems, {
+      originalText: nextResolution.originalText,
+      quantity: nextResolution.quantity,
+      candidates: nextResolution.candidates.map((item) => ({
+        itemId: item.item.id,
+        itemName: item.item.name,
+        confidence: item.confidence,
+      })),
+      remaining,
+    },
+    resolvedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0));
+
+    if (!pending) {
+      return {
+        text: `Sorry, I couldn't save your order yet. Please try again.`,
+        handover: false,
+      };
+    }
+
+    const options = formatClarificationOptions(nextResolution.candidates);
+    return {
+      text: `I also need to confirm one more item: "${nextResolution.originalText}".
+
+${options}
+
+Reply with the number for the item you want.`,
+      handover: false,
+    };
+  }
+
+  if (nextResolution.type === "not_found") {
+    const pending = await setPendingOrder(vendor.id, conversation.customerPhone ?? "unknown", resolvedItems, {
+      originalText: nextResolution.originalText,
+      quantity: nextResolution.quantity,
+      candidates: [],
+      remaining,
+    },
+    resolvedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0));
+
+    if (!pending) {
+      return {
+        text: `Sorry, I couldn't save your order yet. Please try again.`,
+        handover: false,
+      };
+    }
+
+    return {
+      text: `I couldn't match "${nextResolution.originalText}". Reply YES to continue with the rest of your order, or NO to start over.`,
+      handover: false,
+    };
+  }
+
+  if (nextResolution.type === "unavailable") {
+    const pending = await setPendingOrder(vendor.id, conversation.customerPhone ?? "unknown", resolvedItems, {
+      originalText: nextResolution.item.name,
+      quantity: nextResolution.quantity,
+      candidates: [],
+      remaining,
+    },
+    resolvedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0));
+
+    if (!pending) {
+      return {
+        text: `Sorry, I couldn't save your order yet. Please try again.`,
+        handover: false,
+      };
+    }
+
+    return {
+      text: `Sorry, ${nextResolution.item.name} is currently unavailable. Reply YES to continue with the rest of your order, or NO to start over.`,
+      handover: false,
+    };
+  }
+
+  return {
+    text: `Sorry, I couldn't understand that last response. Please try again.`,
+    handover: false,
+  };
+}
+
+function resolveOrderRequest(
+  req: ParsedItem,
+  activeItems: MenuItemRow[],
+  allItems: MenuItemRow[],
+): OrderResolution {
+  if (req.kind === "number") {
+    const item = activeItems[req.index - 1] ?? null;
+    if (!item) {
+      return { type: "not_found", originalText: `${req.index}`, quantity: req.quantity };
+    }
+    if (!item.available) {
+      return { type: "unavailable", item, quantity: req.quantity };
+    }
+    return { type: "resolved", item, quantity: req.quantity };
+  }
+
+  const fuzzyResult = findBestMenuMatch(req.name, allItems);
+  if (fuzzyResult.kind === "exact" || fuzzyResult.kind === "unique") {
+    if (!fuzzyResult.item.available) {
+      return { type: "unavailable", item: fuzzyResult.item, quantity: req.quantity };
+    }
+    return { type: "resolved", item: fuzzyResult.item, quantity: req.quantity };
+  }
+
+  if (fuzzyResult.kind === "ambiguous") {
+    return {
+      type: "ambiguous",
+      originalText: req.name,
+      quantity: req.quantity,
+      candidates: fuzzyResult.options.map((item) => ({ item, confidence: fuzzyResult.confidence })),
+    };
+  }
+
+  return { type: "not_found", originalText: req.name, quantity: req.quantity };
+}
 function paymentInstructions(vendor: VendorRow, total: number): string {
   if (vendor.bankName && vendor.bankAccountNumber) {
     return [
@@ -256,40 +944,6 @@ async function findOrCreateConversation(
  * Returns items with menu price/details or null if any item not found.
  * Issue #8: Multi-Item Order Support
  */
-async function resolveOrderItems(
-  requested: ParsedItem[],
-  allItems: MenuItemRow[],
-): Promise<
-  Array<{ item: MenuItemRow; quantity: number }> | null
-> {
-  const resolved: Array<{ item: MenuItemRow; quantity: number }> = [];
-
-  for (const req of requested) {
-    let matchedItem: MenuItemRow | null = null;
-
-    if (req.kind === "number") {
-      matchedItem = allItems[req.index - 1] ?? null;
-    } else {
-      // Use fuzzy matching for name-based orders
-      const fuzzyResult = findBestMenuMatch(req.name, allItems);
-      if (fuzzyResult.kind === "exact" || fuzzyResult.kind === "unique") {
-        matchedItem = fuzzyResult.item;
-      } else if (fuzzyResult.kind === "ambiguous") {
-        // Return ambiguity error for user to clarify
-        return null;
-      }
-    }
-
-    if (!matchedItem) {
-      return null;
-    }
-
-    resolved.push({ item: matchedItem, quantity: req.quantity });
-  }
-
-  return resolved.length > 0 ? resolved : null;
-}
-
 /**
  * Create order with database transaction to prevent race conditions.
  * Issue #10: Race Condition Prevention with Pessimistic Lock
@@ -550,185 +1204,77 @@ async function computeBotReply(
     };
   }
 
-  // Check for order confirmation from pending order
   const pendingOrder = await getPendingOrder(vendor.id, conversation.customerPhone);
-  const confirmTriggers = ["yes", "confirm", "ok", "yeah", "yep", "sure"];
-  if (
-    pendingOrder &&
-    (startsWithAny(body, confirmTriggers) || body.toLowerCase() === "y")
-  ) {
-    // Clear pending order and create the actual order
-    // Using database transaction prevents duplicate orders from concurrent requests
-    await clearPendingOrder(vendor.id, conversation.customerPhone);
 
-    const order = await createOrderWithLock(
-      vendor.id,
-      conversation.customerPhone ?? "unknown",
-      conversation.customerName ?? "Anonymous",
-      [{ item: pendingOrder.item, quantity: pendingOrder.quantity }],
-      vendor,
-    );
+  if (pendingOrder?.pendingClarification) {
+    const followUp = await resolvePendingClarification(vendor, conversation, body, pendingOrder);
+    if (followUp) return followUp;
+  }
 
-    if (!order) {
+  if (pendingOrder) {
+    if (isAffirmative(body)) {
+      const order = await createOrderWithLock(
+        vendor.id,
+        conversation.customerPhone ?? "unknown",
+        conversation.customerName ?? "Anonymous",
+        pendingOrder.resolvedItems.map(pendingResolvedItemToOrderItem),
+        vendor,
+      );
+
+      await clearPendingOrder(vendor.id, conversation.customerPhone);
+
+      if (!order) {
+        return {
+          text: `Sorry, I encountered an error confirming your order. Please try again.`,
+          handover: false,
+        };
+      }
+
+      const orderItems = pendingOrder.resolvedItems.map(pendingResolvedItemToOrderItem);
+      const lines: string[] = [`*Order confirmed! ✓*`, ``];
+      for (const item of orderItems) {
+        lines.push(
+          `- ${item.quantity}× ${item.item.name} — ${formatMoney(
+            Number(item.item.price) * item.quantity,
+            vendor.currency,
+          )}`,
+        );
+      }
+      lines.push(``, `Total: *${formatMoney(pendingOrder.total, vendor.currency)}*`);
+      lines.push(``, `Order #${order.id.slice(0, 8)} sent to vendor. They'll confirm shortly.`);
+
+      const adminLines: string[] = [
+        `*New order from ${conversation.customerName}* (${conversation.customerPhone})`,
+        ``,
+      ];
+      for (const item of orderItems) {
+        adminLines.push(
+          `- ${item.quantity}× ${item.item.name} — ${formatMoney(
+            Number(item.item.price) * item.quantity,
+            vendor.currency,
+          )}`,
+        );
+      }
+      adminLines.push(``, `Total: ${formatMoney(pendingOrder.total, vendor.currency)}`, ``, `Reply *confirm ${order.id.slice(0, 8)}* or *reject ${order.id.slice(0, 8)}*.`);
+
       return {
-        text: `Sorry, I encountered an error confirming your order. Please try again.`,
+        text: lines.join("\n"),
         handover: false,
+        adminAlert: adminLines.join("\n"),
       };
     }
 
-    const lines: string[] = [`*Order confirmed! ✓*`, ``];
-    lines.push(
-      `- ${pendingOrder.quantity}× ${pendingOrder.item.name} — ${formatMoney(pendingOrder.total, vendor.currency)}`,
-    );
-    lines.push(``, `Total: *${formatMoney(pendingOrder.total, vendor.currency)}*`);
-    lines.push(
-      ``,
-      `Order #${order.id.slice(0, 8)} sent to vendor. They'll confirm shortly.`,
-    );
-
-    const adminLines: string[] = [
-      `*New order from ${conversation.customerName}* (${conversation.customerPhone})`,
-      ``,
-    ];
-    adminLines.push(
-      `- ${pendingOrder.quantity}× ${pendingOrder.item.name} — ${formatMoney(pendingOrder.total, vendor.currency)}`,
-    );
-    adminLines.push(
-      ``,
-      `Total: ${formatMoney(pendingOrder.total, vendor.currency)}`,
-      ``,
-      `Reply *confirm ${order.id.slice(0, 8)}* or *reject ${order.id.slice(0, 8)}*.`,
-    );
-
-    return {
-      text: lines.join("\n"),
-      handover: false,
-      adminAlert: adminLines.join("\n"),
-    };
+    if (isNegative(body)) {
+      await clearPendingOrder(vendor.id, conversation.customerPhone);
+      return {
+        text: `Okay, your pending order was cancelled. Reply *menu* to start again.`,
+        handover: false,
+      };
+    }
   }
 
-  // Check for rejection of pending order
-  const rejectTriggers = ["no", "cancel", "nope"];
-  if (
-    pendingOrder &&
-    (startsWithAny(body, rejectTriggers) || body.toLowerCase() === "n")
-  ) {
-    await clearPendingOrder(vendor.id, conversation.customerPhone);
-    return {
-      text: `Order cancelled. Reply *menu* if you'd like to start over.`,
-      handover: false,
-    };
-  }
-
-  // Order detection (number picks, "order <name>", "<qty> <name>", etc.)
-  // Issue #8: Now handles MULTIPLE items like "1, 3x2, 5"
   if (looksLikeOrder(body)) {
-    const requested = parseOrderLine(body);
-    const allItems = await listActiveMenuItems(vendor);
-
-    if (allItems.length === 0) {
-      return {
-        text: `Our menu is being updated. Please check back soon.`,
-        handover: false,
-      };
-    }
-
-    // Resolve all requested items (not just first)
-    let resolvedItems: Array<{ item: MenuItemRow; quantity: number }> | null = null;
-    let ambiguousItemName: string | undefined;
-    let ambiguousOptions: MenuItemRow[] | undefined;
-
-    if (requested.length > 0) {
-      // First try to resolve all requested items
-      resolvedItems = await resolveOrderItems(requested, allItems);
-
-      // Check if there was an ambiguous match and handle it separately
-      if (!resolvedItems) {
-        const firstReq = requested[0];
-        if (firstReq.kind === "name") {
-          const fuzzyResult = findBestMenuMatch(firstReq.name, allItems);
-          if (fuzzyResult.kind === "ambiguous") {
-            ambiguousItemName = firstReq.name;
-            ambiguousOptions = fuzzyResult.options;
-          }
-        }
-      }
-    } else {
-      // No standard pattern detected, try AI extraction
-      const aiData = await aiExtractOrder(body);
-      if (aiData?.item) {
-        const fuzzyResult = findBestMenuMatch(aiData.item, allItems);
-        if (fuzzyResult.kind === "exact" || fuzzyResult.kind === "unique") {
-          const matchedItem = fuzzyResult.item;
-          const qty = aiData.quantity ?? 1;
-          resolvedItems = [{ item: matchedItem, quantity: qty }];
-        } else if (fuzzyResult.kind === "ambiguous") {
-          ambiguousItemName = aiData.item;
-          ambiguousOptions = fuzzyResult.options;
-        }
-      }
-    }
-
-    // Handle ambiguous matches
-    if (ambiguousOptions && ambiguousItemName) {
-      const options = ambiguousOptions
-        .map((opt, idx) => `*${idx + 1}*: ${opt.name}`)
-        .join("\n");
-      return {
-        text: `I found multiple items matching "*${ambiguousItemName}*":\n\n${options}\n\nReply with the number you want.`,
-        handover: false,
-      };
-    }
-
-    // No items resolved
-    if (!resolvedItems || resolvedItems.length === 0) {
-      return {
-        text: `I couldn't understand that order. Reply *menu* to see what's available, then send the number or item name.`,
-        handover: false,
-      };
-    }
-
-    // Calculate total for all items
-    const total = resolvedItems.reduce(
-      (sum, item) => sum + Number(item.item.price) * item.quantity,
-      0,
-    );
-
-    // For multi-item orders, show all items being ordered
-    const itemSummary = resolvedItems
-      .map((item) =>
-        `${item.quantity}× ${item.item.name} — ${formatMoney(
-          Number(item.item.price) * item.quantity,
-          vendor.currency,
-        )}`,
-      )
-      .join("\n");
-
-    // Store as pending order and ask for confirmation
-    // For now, store first item in pending orders table
-    // In future, could extend schema for multi-item pending orders
-    const firstResolved = resolvedItems[0];
-    const pending = await setPendingOrder(
-      vendor.id,
-      conversation.customerPhone ?? "unknown",
-      firstResolved.item,
-      firstResolved.quantity,
-      Number(firstResolved.item.price) * firstResolved.quantity,
-    );
-
-    if (!pending) {
-      return {
-        text: `Sorry, I encountered an error processing your order. Please try again.`,
-        handover: false,
-      };
-    }
-
-    // Prepare confirmation message
-    let confirmationText = `Order summary:\n\n${itemSummary}\n\nTotal: *${formatMoney(total, vendor.currency)}*\n\nReply *YES* to confirm or *NO* to cancel.`;
-    return {
-      text: confirmationText,
-      handover: false,
-    };
+    return await buildPendingOrderState(vendor, conversation, body);
   }
 
   // Menu request
@@ -779,79 +1325,18 @@ export async function notifyOrderConfirmedToCustomer(args: {
 
 type AdminReply = { text: string | null };
 
-async function findOrderByShortId(
-  vendorId: string,
-  shortId: string,
-): Promise<OrderRow | null> {
-  const all = await db
-    .select()
-    .from(ordersTable)
-    .where(eq(ordersTable.vendorId, vendorId))
-    .orderBy(desc(ordersTable.createdAt));
-  return all.find((o) => o.id.startsWith(shortId.toLowerCase())) ?? null;
-}
-
-async function findLatestPendingOrder(vendorId: string): Promise<OrderRow | null> {
-  const rows = await db
-    .select()
-    .from(ordersTable)
-    .where(
-      and(eq(ordersTable.vendorId, vendorId), eq(ordersTable.status, "pending")),
-    )
-    .orderBy(desc(ordersTable.createdAt))
-    .limit(1);
-  return rows[0] ?? null;
-}
-
-async function findLatestConfirmedOrder(
-  vendorId: string,
-): Promise<OrderRow | null> {
-  const rows = await db
-    .select()
-    .from(ordersTable)
-    .where(
-      and(
-        eq(ordersTable.vendorId, vendorId),
-        eq(ordersTable.status, "confirmed"),
-      ),
-    )
-    .orderBy(desc(ordersTable.createdAt))
-    .limit(1);
-  return rows[0] ?? null;
-}
-
-async function notifyCustomer(
-  vendor: VendorRow,
-  customerPhone: string,
-  text: string,
-): Promise<void> {
-  // Record in their conversation if one exists, plus push to WhatsApp.
-  const [conv] = await db
-    .select()
-    .from(conversationsTable)
-    .where(
-      and(
-        eq(conversationsTable.vendorId, vendor.id),
-        eq(conversationsTable.customerPhone, customerPhone),
-      ),
-    )
-    .limit(1);
-  if (conv) {
-    await recordMessage(conv.id, "out", "vendor", text);
-  }
-  await sendWhatsAppMessage({
-    phoneNumberId: vendor.phoneNumberId,
-    to: customerPhone,
-    text,
-  });
-}
-
 export async function handleAdminCommand(
   vendor: VendorRow,
   raw: string,
 ): Promise<AdminReply> {
   const body = raw.trim();
   const lower = body.toLowerCase();
+
+  const aiIntent = await aiExtractAdminIntent(body);
+  if (aiIntent && aiIntent.intent !== "unknown") {
+    const aiReply = await handleAdminIntent(vendor, aiIntent);
+    if (aiReply) return aiReply;
+  }
 
   // /help
   if (lower === "/help" || lower === "help" || lower === "?") {
@@ -1288,6 +1773,345 @@ export async function handleAdminCommand(
     text: [
       `Command not recognized. Reply */help* for the full list.`,
     ].join("\n"),
+  };
+}
+
+async function handleAdminIntent(
+  vendor: VendorRow,
+  extracted: ExtractedAdminIntent,
+): Promise<AdminReply | null> {
+  const entities = extracted.entities ?? {};
+  const itemName = normalizeAdminEntityString(entities.itemName);
+  const price = normalizeAdminEntityNumber(entities.price);
+  const orderId = normalizeAdminEntityString(entities.orderId);
+  const customerPhone = normalizeAdminEntityString(entities.customerPhone);
+
+  switch (extracted.intent) {
+    case "show_menu":
+      return await handleAdminShowMenu(vendor);
+    case "add_menu_item":
+      return await handleAdminAddMenuItem(vendor, itemName, price);
+    case "remove_menu_item":
+      return await handleAdminRemoveMenuItem(vendor, itemName);
+    case "update_price":
+      return await handleAdminUpdatePrice(vendor, itemName, price);
+    case "mark_unavailable":
+      return await handleAdminSetAvailability(vendor, itemName, false);
+    case "mark_available":
+      return await handleAdminSetAvailability(vendor, itemName, true);
+    case "confirm_order":
+      return await handleAdminConfirmOrder(vendor, orderId);
+    case "reject_order":
+      return await handleAdminRejectOrder(vendor, orderId);
+    case "confirm_payment":
+      return await handleAdminConfirmPayment(vendor, orderId);
+    case "switch_human":
+      return await handleAdminSwitchHuman(vendor, customerPhone);
+    case "switch_bot":
+      return await handleAdminSwitchBot(vendor, customerPhone);
+    default:
+      return null;
+  }
+}
+
+function normalizeAdminEntityString(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed === "" ? null : trimmed;
+  }
+  if (typeof value === "number") {
+    return String(value);
+  }
+  return null;
+}
+
+function normalizeAdminEntityNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const cleaned = value.replace(/[^0-9.]/g, "");
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+async function findMenuItemByName(
+  vendor: VendorRow,
+  query: string,
+): Promise<MenuItemRow | null> {
+  const items = await db
+    .select()
+    .from(menuItemsTable)
+    .where(eq(menuItemsTable.vendorId, vendor.id));
+  const normalized = query.toLowerCase();
+  return (
+    items.find((item) => item.name.toLowerCase() === normalized) ??
+    items.find((item) => item.name.toLowerCase().includes(normalized)) ??
+    null
+  );
+}
+
+async function handleAdminShowMenu(vendor: VendorRow): Promise<AdminReply> {
+  const items = await db
+    .select()
+    .from(menuItemsTable)
+    .where(eq(menuItemsTable.vendorId, vendor.id));
+  if (items.length === 0) {
+    return { text: `Your menu is empty. Use *add <name> <price>* to add items.` };
+  }
+  const lines = [`*Your menu*`, ``];
+  for (const item of items) {
+    const tag = item.available ? "" : " (unavailable)";
+    lines.push(
+      `- ${item.name} — ${formatMoney(Number(item.price), vendor.currency)}${tag}`,
+    );
+  }
+  return { text: lines.join("\n") };
+}
+
+async function handleAdminAddMenuItem(
+  vendor: VendorRow,
+  itemName: string | null,
+  price: number | null,
+): Promise<AdminReply> {
+  if (!itemName || price === null) {
+    return {
+      text: `Please provide an item name and price, for example: add_menu_item itemName="Jollof Rice" price=2500`,
+    };
+  }
+  const [created] = await db
+    .insert(menuItemsTable)
+    .values({
+      vendorId: vendor.id,
+      name: itemName,
+      price: price.toFixed(2),
+      available: true,
+    })
+    .returning();
+  return {
+    text: `Added *${created!.name}* at ${formatMoney(Number(created!.price), vendor.currency)}.`,
+  };
+}
+
+async function handleAdminRemoveMenuItem(
+  vendor: VendorRow,
+  itemName: string | null,
+): Promise<AdminReply> {
+  if (!itemName) {
+    return { text: `Please tell me which item to remove.` };
+  }
+  const target = await findMenuItemByName(vendor, itemName);
+  if (!target) {
+    return { text: `No menu item matching "${itemName}" was found.` };
+  }
+  await db.delete(menuItemsTable).where(eq(menuItemsTable.id, target.id));
+  return { text: `Removed *${target.name}* from your menu.` };
+}
+
+async function handleAdminUpdatePrice(
+  vendor: VendorRow,
+  itemName: string | null,
+  price: number | null,
+): Promise<AdminReply> {
+  if (!itemName || price === null) {
+    return { text: `Please provide an item name and price to update.` };
+  }
+  const target = await findMenuItemByName(vendor, itemName);
+  if (!target) {
+    return { text: `No menu item matching "${itemName}" was found.` };
+  }
+  await db
+    .update(menuItemsTable)
+    .set({ price: price.toFixed(2) })
+    .where(eq(menuItemsTable.id, target.id));
+  return {
+    text: `Updated *${target.name}* to ${formatMoney(price, vendor.currency)}.`,
+  };
+}
+
+async function handleAdminSetAvailability(
+  vendor: VendorRow,
+  itemName: string | null,
+  available: boolean,
+): Promise<AdminReply> {
+  if (!itemName) {
+    return { text: `Please tell me which item to mark ${available ? "available" : "unavailable"}.` };
+  }
+  const target = await findMenuItemByName(vendor, itemName);
+  if (!target) {
+    return { text: `No menu item matching "${itemName}" was found.` };
+  }
+  await db
+    .update(menuItemsTable)
+    .set({ available })
+    .where(eq(menuItemsTable.id, target.id));
+  return {
+    text: `Marked *${target.name}* as ${available ? "available" : "unavailable"}.`,
+  };
+}
+
+async function handleAdminConfirmOrder(
+  vendor: VendorRow,
+  orderId: string | null,
+): Promise<AdminReply> {
+  const order = orderId
+    ? await findOrderByShortId(vendor.id, orderId)
+    : await findLatestPendingOrder(vendor.id);
+  if (!order) return { text: `No matching order to confirm.` };
+  if (order.status !== "pending") {
+    return { text: `Order #${order.id.slice(0, 8)} is already ${order.status}.` };
+  }
+  await db
+    .update(ordersTable)
+    .set({ status: "confirmed" })
+    .where(eq(ordersTable.id, order.id));
+  await notifyCustomer(
+    vendor,
+    order.customerPhone,
+    paymentInstructions(vendor, Number(order.total)),
+  );
+  return {
+    text: `Confirmed #${order.id.slice(0, 8)} for ${order.customerName}. Payment instructions were sent to the customer.`,
+  };
+}
+
+async function handleAdminRejectOrder(
+  vendor: VendorRow,
+  orderId: string | null,
+): Promise<AdminReply> {
+  const order = orderId
+    ? await findOrderByShortId(vendor.id, orderId)
+    : await findLatestPendingOrder(vendor.id);
+  if (!order) return { text: `No matching order to reject.` };
+  if (order.status !== "pending") {
+    return { text: `Order #${order.id.slice(0, 8)} is already ${order.status}.` };
+  }
+  await db
+    .update(ordersTable)
+    .set({ status: "rejected" })
+    .where(eq(ordersTable.id, order.id));
+  await notifyCustomer(
+    vendor,
+    order.customerPhone,
+    `Sorry, your order #${order.id.slice(0, 8)} couldn't be accepted right now. Reply *menu* to try again.`,
+  );
+  return {
+    text: `Rejected #${order.id.slice(0, 8)}. The customer was notified.`,
+  };
+}
+
+async function handleAdminConfirmPayment(
+  vendor: VendorRow,
+  orderId: string | null,
+): Promise<AdminReply> {
+  const order = orderId
+    ? await findOrderByShortId(vendor.id, orderId)
+    : await findLatestConfirmedOrder(vendor.id);
+  if (!order) return { text: `No matching order to mark paid.` };
+  if (order.paymentStatus === "paid") {
+    return { text: `Order #${order.id.slice(0, 8)} is already marked paid.` };
+  }
+  await db
+    .update(ordersTable)
+    .set({ status: "paid", paymentStatus: "paid" })
+    .where(eq(ordersTable.id, order.id));
+  await db.insert(paymentsTable).values({
+    vendorId: vendor.id,
+    orderId: order.id,
+    customerName: order.customerName,
+    amount: order.total,
+    currency: order.currency,
+    method: "bank_transfer",
+    status: "confirmed",
+    reference: "vendor_confirmed_via_chat",
+  });
+  await db
+    .insert(customersTable)
+    .values({
+      vendorId: vendor.id,
+      phone: order.customerPhone,
+      name: order.customerName,
+      totalOrders: 1,
+      totalSpent: order.total,
+    })
+    .onConflictDoUpdate({
+      target: [customersTable.vendorId, customersTable.phone],
+      set: {
+        totalOrders: sql`${customersTable.totalOrders} + 1`,
+        totalSpent: sql`${customersTable.totalSpent} + ${order.total}`,
+        name: order.customerName,
+        lastSeenAt: new Date(),
+      },
+    });
+  await notifyCustomer(
+    vendor,
+    order.customerPhone,
+    `Payment received for order #${order.id.slice(0, 8)}. Thank you!`,
+  );
+  return {
+    text: `Payment confirmed on #${order.id.slice(0, 8)}. The customer was notified.`,
+  };
+}
+
+async function handleAdminSwitchHuman(
+  vendor: VendorRow,
+  customerPhone: string | null,
+): Promise<AdminReply> {
+  const target = customerPhone?.trim();
+  if (!target) {
+    return { text: `Please provide the customer's phone to switch to human handling.` };
+  }
+  const updated = await db
+    .update(conversationsTable)
+    .set({ status: "human" })
+    .where(
+      and(
+        eq(conversationsTable.vendorId, vendor.id),
+        eq(conversationsTable.customerPhone, target),
+      ),
+    )
+    .returning();
+  if (updated.length === 0) {
+    return { text: `No conversation found for ${target}.` };
+  }
+  return { text: `Bot paused for ${target}. You'll handle this chat manually.` };
+}
+
+async function handleAdminSwitchBot(
+  vendor: VendorRow,
+  customerPhone: string | null,
+): Promise<AdminReply> {
+  const target = customerPhone?.trim();
+  if (target) {
+    const updated = await db
+      .update(conversationsTable)
+      .set({ status: "bot" })
+      .where(
+        and(
+          eq(conversationsTable.vendorId, vendor.id),
+          eq(conversationsTable.customerPhone, target),
+        ),
+      )
+      .returning();
+    if (updated.length === 0) {
+      return { text: `No conversation found for ${target}.` };
+    }
+    return { text: `Bot resumed for ${target}.` };
+  }
+  const updated = await db
+    .update(conversationsTable)
+    .set({ status: "bot" })
+    .where(
+      and(
+        eq(conversationsTable.vendorId, vendor.id),
+        eq(conversationsTable.status, "human"),
+      ),
+    )
+    .returning();
+  return {
+    text: `Bot resumed on ${updated.length} conversation${updated.length === 1 ? "" : "s"}.`,
   };
 }
 
