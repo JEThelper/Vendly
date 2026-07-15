@@ -93,7 +93,7 @@ async function seed() {
     .returning();
 
   // A pending order
-  const [pendingOrder] = await db
+  await db
     .insert(ordersTable)
     .values({
       vendorId: pizza!.id,
