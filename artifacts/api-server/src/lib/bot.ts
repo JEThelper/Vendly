@@ -25,6 +25,7 @@ import {
   getPendingOrder,
   clearPendingOrder,
   type PendingResolvedItem,
+  type PendingOrder,
 } from "./pending-orders";
 import {
   generateOrderIdempotencyKey,
@@ -704,7 +705,7 @@ async function resolvePendingClarification(
   if (state.originalText === "awaiting_delivery_address") {
     // Store the address in the pending order by creating a new order with the address
     // For now, we'll store it in a special way that the order creation can access
-    const updatedOrder = { ...pendingOrder, deliveryAddress: trimmed } as any;
+    
     // Recreate the pending order with the address, then create the actual order
     const order = await createOrderWithLock(
       vendor.id,
@@ -802,7 +803,7 @@ Reply YES to confirm or NO to cancel.`,
         handover: false,
       };
     }
-    const total = pendingOrder.resolvedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+    const total = pendingOrder.resolvedItems.reduce((sum: number, item: PendingResolvedItem) => sum + item.unitPrice * item.quantity, 0);
     await setPendingOrder(vendor.id, conversation.customerPhone ?? "unknown", pendingOrder.resolvedItems, null, total);
     return {
       text: `${buildOrderSummary(vendor, orderSummaryFromPendingResolvedItems(pendingOrder.resolvedItems))}

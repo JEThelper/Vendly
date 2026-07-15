@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 import { logger } from "./logger";
 
 // Lazily initialize Gemini only if API key is present
@@ -76,6 +77,58 @@ async function runGemini(
   }
 }
 
+let groq: Groq | null = null;
+
+function getGroqClient(): Groq | null {
+  if (!process.env.GROQ_API_KEY) {
+    return null;
+  }
+  if (!groq) {
+    groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  }
+  return groq;
+}
+
+async function runGroq(
+  prompt: string,
+  timeoutMs = 10000,
+): Promise<string | null> {
+  const client = getGroqClient();
+  if (!client) {
+    logger.debug("GROQ_API_KEY not set, skipping fallback AI extraction");
+    return null;
+  }
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error("Groq AI extraction timeout: exceeded 10 seconds"));
+    }, timeoutMs);
+  });
+
+  try {
+    const response = await Promise.race([
+      client.chat.completions.create({
+        messages: [{ role: "user", content: prompt }],
+        model: "llama-3.3-70b-versatile",
+      }),
+      timeoutPromise,
+    ]);
+    return response.choices[0]?.message?.content || null;
+  } catch (err) {
+    logger.warn({ err }, "Groq AI fallback failed");
+    return null;
+  }
+}
+
+async function runLLM(prompt: string, timeoutMs = 10000): Promise<string | null> {
+  let content = await runGemini(prompt, timeoutMs);
+  if (!content) {
+    logger.debug("Gemini failed or unavailable, falling back to Groq");
+    content = await runGroq(prompt, timeoutMs);
+  }
+  return content;
+}
+
 /**
  * Attempts to extract order details using Gemini AI.
  * Returns null if the API is unavailable, times out, fails, or returns invalid JSON.
@@ -93,7 +146,7 @@ export async function aiExtractOrder(
     : "";
   const prompt = `Extract food order details from this customer message. Return ONLY valid JSON. Use this exact shape:\n{\n  "items": [\n    { "item": "<product name exactly as on menu>", "quantity": <integer> }\n  ]\n}\nIf you cannot extract any order items, return null.${menuContext}${historyContext}\n\nCustomer message: ${text}`;
 
-  const content = await runGemini(prompt);
+  const content = await runLLM(prompt);
   if (!content) return null;
 
   logger.debug({ aiResponse: content }, "AI order extraction response");
@@ -148,7 +201,7 @@ export async function aiExtractAdminIntent(
     : "";
   const prompt = `Analyze this vendor message and return ONLY valid JSON in the form {"intent":"<intent>","entities":{...}}. Allowed intents: add_menu_item, remove_menu_item, update_price, mark_unavailable, mark_available, show_menu, confirm_order, reject_order, confirm_payment, switch_human, switch_bot. Use entity names such as itemName, price, orderId, customerPhone. If the intent is unclear, return {"intent":"unknown","entities":{}}. Do not include any extra text.${historyContext}\n\nMessage: ${text}`;
 
-  const content = await runGemini(prompt);
+  const content = await runLLM(prompt);
   if (!content) return null;
 
   logger.debug({ aiResponse: content }, "AI admin intent response");
@@ -199,7 +252,7 @@ Return JSON like: {"intent":"menu","confidence":0.95}
 
 Message: ${text}`;
 
-  const content = await runGemini(prompt);
+  const content = await runLLM(prompt);
   if (!content) return null;
 
   try {

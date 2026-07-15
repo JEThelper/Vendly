@@ -16,7 +16,6 @@ import {
 } from "@workspace/api-zod";
 import { toBroadcast } from "../lib/serializers";
 import { hasFeature } from "../lib/plans";
-import { sendWhatsAppMessage } from "../lib/whatsapp";
 import { queueOutboundMessage, queueBroadcastMessage } from "../lib/queue";
 
 const router: IRouter = Router();

@@ -17,7 +17,6 @@ import {
 } from "@workspace/api-zod";
 import { toOrder } from "../lib/serializers";
 import { notifyOrderConfirmedToCustomer } from "../lib/bot";
-import { sendWhatsAppMessage } from "../lib/whatsapp";
 import { queueOutboundMessage } from "../lib/queue";
 
 const router: IRouter = Router();
@@ -29,7 +28,13 @@ router.get("/vendors/:vendorId/orders", async (req, res) => {
   if (!query.success) return res.status(400).json({ error: "invalid_query" });
 
   const conditions = [eq(ordersTable.vendorId, params.data.vendorId)];
-  if (query.data.status) conditions.push(eq(ordersTable.status, query.data.status));
+  if (query.data.status) {
+    if (query.data.status === "completed") {
+      conditions.push(eq(ordersTable.status, "paid"));
+    } else {
+      conditions.push(eq(ordersTable.status, query.data.status as any));
+    }
+  }
 
   const rows = await db
     .select()
@@ -57,8 +62,8 @@ router.patch("/orders/:orderId", async (req, res) => {
   const body = UpdateOrderStatusBody.safeParse(req.body);
   if (!body.success) return res.status(400).json({ error: "invalid_body", details: body.error.issues });
 
-  const updates: { status: typeof body.data.status; paymentStatus?: "paid" } = {
-    status: body.data.status,
+  const updates: { status: any; paymentStatus?: "paid" } = {
+    status: body.data.status === "completed" ? "paid" : body.data.status,
   };
   if (body.data.status === "paid") {
     updates.paymentStatus = "paid";

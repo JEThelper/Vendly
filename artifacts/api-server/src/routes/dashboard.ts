@@ -47,7 +47,7 @@ router.get("/vendors/:vendorId/summary", async (req, res) => {
     totalOrders += Number(r.count);
     ordersByStatus.push({ status: r.status, count: Number(r.count) });
     if (r.status === "pending") pendingOrders = Number(r.count);
-    if (r.status === "paid" || r.status === "completed") revenue += Number(r.revenue);
+    if (r.status === "paid") revenue += Number(r.revenue);
   }
 
   const [{ openConversations }] = await db
@@ -65,9 +65,10 @@ router.get("/vendors/:vendorId/summary", async (req, res) => {
   const [{ messagesToday }] = await db
     .select({ messagesToday: sql<number>`count(*)::int` })
     .from(messagesTable)
+    .innerJoin(conversationsTable, eq(messagesTable.conversationId, conversationsTable.id))
     .where(
       and(
-        sql`${messagesTable.vendorId} = ${vendorId}`,
+        eq(conversationsTable.vendorId, vendorId),
         gte(messagesTable.createdAt, todayStart)
       )
     );
@@ -78,7 +79,7 @@ router.get("/vendors/:vendorId/summary", async (req, res) => {
     .where(eq(customersTable.vendorId, vendorId))
     .then(rows => rows[0]?.count ?? 0);
 
-  res.json({
+  return res.json({
     vendorId,
     vendorName: vendor.name,
     plan: vendor.plan,
@@ -198,7 +199,7 @@ router.get("/vendors/:vendorId/analytics", async (req, res) => {
     .select({
       day: sql<string>`to_char(date_trunc('day', ${ordersTable.createdAt}), 'YYYY-MM-DD')`,
       count: sql<number>`count(*)::int`,
-      revenue: sql<number>`coalesce(sum(case when ${ordersTable.status} in ('paid','completed') then ${ordersTable.total} else 0 end)::float, 0)`,
+      revenue: sql<number>`coalesce(sum(case when ${ordersTable.status} in ('paid') then ${ordersTable.total} else 0 end)::float, 0)`,
     })
     .from(ordersTable)
     .where(

@@ -92,7 +92,7 @@ router.get("/vendors/:vendorId", async (req, res) => {
     totalOrders += Number(r.count);
     if (r.status === "pending") pendingOrders = Number(r.count);
     if (r.status === "confirmed") confirmedOrders = Number(r.count);
-    if (r.status === "paid" || r.status === "completed") {
+    if (r.status === "paid") {
       paidOrders += Number(r.count);
       revenue += Number(r.revenue);
     }
