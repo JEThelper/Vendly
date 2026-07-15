@@ -6,9 +6,9 @@ import {
   numeric,
   jsonb,
   index,
-  sql,
   pgEnum,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { vendorsTable } from "./vendors";
 
 export type OrderItemJson = {
