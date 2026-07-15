@@ -17,7 +17,6 @@ import {
 } from "@/components/ui/select";
 import { Send, Smartphone, ArrowRight } from "lucide-react";
 import { format } from "date-fns";
-import { cn } from "@/lib/utils";
 
 type Message = {
   id: string;
@@ -133,7 +132,7 @@ export default function Simulator() {
     }
   }
 
-  const selectedVendor = vendorList.find((v) => v.id === vendorId);
+  const selectedVendor = vendorList.find((v: any) => v.id === vendorId);
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -155,7 +154,7 @@ export default function Simulator() {
               <Select value={vendorId} onValueChange={setVendorId}>
                 <SelectTrigger><SelectValue placeholder="Choose a vendor" /></SelectTrigger>
                 <SelectContent>
-                  {vendorList.map((v) => (
+                  {vendorList.map((v: any) => (
                     <SelectItem key={v.id} value={v.id}>{v.name} ({v.plan})</SelectItem>
                   ))}
                 </SelectContent>

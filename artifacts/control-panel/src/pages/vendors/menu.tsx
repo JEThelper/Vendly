@@ -24,7 +24,7 @@ interface MenuItem {
   name: string;
   description?: string | null;
   price: number;
-  category?: string;
+  category?: string | null;
   available: boolean;
 }
 

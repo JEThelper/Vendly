@@ -20,9 +20,9 @@ import { format } from "date-fns";
 
 export default function VendorBroadcasts({ vendorId }: { vendorId: string }) {
   const qc = useQueryClient();
-  const { data: vendor } = useGetVendor(vendorId, { query: { enabled: !!vendorId } });
+  const { data: vendor } = useGetVendor(vendorId, { query: { queryKey: getGetVendorQueryKey(vendorId), enabled: !!vendorId } });
   const { data: history, isLoading } = useListVendorBroadcasts(vendorId, {
-    query: { enabled: !!vendorId },
+    query: { queryKey: getListVendorBroadcastsQueryKey(vendorId), enabled: !!vendorId },
   });
   const send = useSendVendorBroadcast();
   const runFollowUps = useRunVendorFollowUps();

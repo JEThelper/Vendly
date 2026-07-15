@@ -19,7 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 
 export default function VendorConversations({ vendorId }: { vendorId: string }) {
   const { data: conversations, isLoading } = useListVendorConversations(vendorId, {
-    query: { enabled: !!vendorId, refetchInterval: 4000 },
+    query: { queryKey: getListVendorConversationsQueryKey(vendorId), enabled: !!vendorId, refetchInterval: 4000 },
   });
   const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -96,7 +96,7 @@ function ConversationThread({ conversationId, vendorId }: { conversationId: stri
   const qc = useQueryClient();
   const { toast } = useToast();
   const { data, isLoading } = useGetConversation(conversationId, {
-    query: { enabled: !!conversationId, refetchInterval: 3000 },
+    query: { queryKey: getGetConversationQueryKey(conversationId), enabled: !!conversationId, refetchInterval: 3000 },
   });
   const updateConv = useUpdateConversation();
   const sendMessage = useSendMessage();

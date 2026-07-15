@@ -1,4 +1,4 @@
-import { useGetVendor, useGetVendorAnalytics } from "@workspace/api-client-react";
+import { useGetVendor, getGetVendorQueryKey, useGetVendorAnalytics, getGetVendorAnalyticsQueryKey } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
@@ -7,8 +7,8 @@ import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, AreaChart,
 import { formatCurrency } from "@/lib/utils";
 
 export default function VendorAnalytics({ vendorId }: { vendorId: string }) {
-  const { data: vendor } = useGetVendor(vendorId, { query: { enabled: !!vendorId } });
-  const { data, isLoading } = useGetVendorAnalytics(vendorId, { query: { enabled: !!vendorId } });
+  const { data: vendor } = useGetVendor(vendorId, { query: { queryKey: getGetVendorQueryKey(vendorId), enabled: !!vendorId } });
+  const { data, isLoading } = useGetVendorAnalytics(vendorId, { query: { queryKey: getGetVendorAnalyticsQueryKey(vendorId), enabled: !!vendorId } });
 
   const isPro = vendor?.plan === "pro";
 

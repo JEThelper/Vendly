@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  type Order,
   useListVendorOrders,
   useUpdateOrderStatus,
   getListVendorOrdersQueryKey,
@@ -75,7 +76,7 @@ export default function VendorOrders({ vendorId }: { vendorId: string }) {
   );
 }
 
-function OrderRow({ order, vendorId }: { order: NonNullable<ReturnType<typeof useListVendorOrders>["data"]>[number]; vendorId: string }) {
+function OrderRow({ order, vendorId }: { order: Order; vendorId: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const updateStatus = useUpdateOrderStatus();

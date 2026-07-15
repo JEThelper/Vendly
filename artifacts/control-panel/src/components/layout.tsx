@@ -6,7 +6,7 @@ import {
   Tag, Megaphone
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useGetVendor } from "@workspace/api-client-react";
+import { useGetVendor, getGetVendorQueryKey } from "@workspace/api-client-react";
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -14,7 +14,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const isVendorRoute = location.startsWith("/vendors/") && location !== "/vendors/new" && params.vendorId;
 
   const { data: vendor } = useGetVendor(params.vendorId || "", {
-    query: { enabled: !!isVendorRoute }
+    query: { queryKey: getGetVendorQueryKey(params.vendorId || ""), enabled: !!isVendorRoute }
   });
 
   const mainNavItems = [

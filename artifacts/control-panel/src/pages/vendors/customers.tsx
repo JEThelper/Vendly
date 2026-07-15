@@ -1,4 +1,4 @@
-import { useGetVendor, useListVendorCustomers } from "@workspace/api-client-react";
+import { useGetVendor, getGetVendorQueryKey, useListVendorCustomers, getListVendorCustomersQueryKey } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
 import { format } from "date-fns";
@@ -7,8 +7,8 @@ import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 
 export default function VendorCustomers({ vendorId }: { vendorId: string }) {
-  const { data: vendor } = useGetVendor(vendorId, { query: { enabled: !!vendorId } });
-  const { data: customers, isLoading } = useListVendorCustomers(vendorId, { query: { enabled: !!vendorId } });
+  const { data: vendor } = useGetVendor(vendorId, { query: { queryKey: getGetVendorQueryKey(vendorId), enabled: !!vendorId } });
+  const { data: customers, isLoading } = useListVendorCustomers(vendorId, { query: { queryKey: getListVendorCustomersQueryKey(vendorId), enabled: !!vendorId } });
 
   const isPro = vendor?.plan === "pro";
 
