@@ -12,13 +12,13 @@ export class ConversationManager {
     vendor: VendorRow,
     customerPhone: string,
     message: string
-  ): Promise<void> {
+  ): Promise<{ text: string | null }> {
     
     // Check for system commands
     if (message.startsWith("/admin") || message.startsWith("/debug") || message.startsWith("/reset")) {
       logger.info("System command detected. Bypassing LLM.");
       // Handle system commands directly (legacy style)
-      return;
+      return { text: "System commands temporarily disabled." };
     }
 
     try {
@@ -44,13 +44,12 @@ export class ConversationManager {
         }
       }
 
-      // 5. Check if we need to loop back to LLM with tool results (Not implemented in this basic phase)
-      
-      // 6. Queue Outbound Response
+      // 5. Queue Outbound Response (for real webhooks)
       if (response.assistant_response && vendor.phoneNumberId) {
          await queueOutboundMessage(vendor.phoneNumberId, customerPhone, response.assistant_response);
       }
       
+      return { text: response.assistant_response };
     } catch (error) {
       logger.error({ error }, "ConversationManager Error:");
       if (vendor.phoneNumberId) {
@@ -60,6 +59,7 @@ export class ConversationManager {
           "I'm sorry, I'm having trouble processing your request right now. Please try again in a moment."
         );
       }
+      return { text: "Error processing request." };
     }
   }
 }

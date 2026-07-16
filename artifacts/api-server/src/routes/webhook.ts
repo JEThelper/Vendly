@@ -9,7 +9,7 @@ import {
   WhatsappWebhookBody,
   SimulateIncomingMessageBody,
 } from "@workspace/api-zod";
-import { handleIncomingMessage } from "../lib/bot";
+
 import { queueIncomingMessage, queueOutboundMessage } from "../lib/queue";
 import { logger } from "../lib/logger";
 import { shouldRateLimitCustomer } from "../lib/rate-limiter-redis";
@@ -254,19 +254,19 @@ router.post("/webhook/whatsapp", async (req, res) => {
       .json({ ok: false, botReply: null, conversationId: null });
   }
 
-  const result = await withVendorContext(vendor.id, () => handleIncomingMessage({
+  const { ConversationManager } = await import("../lib/intelligence/conversation-manager");
+  const result = await withVendorContext(vendor.id, () => ConversationManager.handleIncomingMessage(
     vendor,
-    fromPhone: body.data.from,
-    fromName: body.data.profileName ?? body.data.from,
-    body: body.data.body,
-  }));
+    body.data.from,
+    body.data.body
+  ));
 
   return res.json({
     ok: true,
-    botReply: result.botReply,
-    conversationId: result.conversation?.id ?? null,
-    isAdmin: result.isAdmin,
-    adminNotification: result.adminNotification,
+    botReply: result.text,
+    conversationId: null, // Legacy field not tightly coupled anymore
+    isAdmin: false,
+    adminNotification: false,
   });
 });
 
@@ -287,19 +287,19 @@ router.post("/simulator/incoming", async (req, res) => {
   if (!vendor) return res.status(404).json({ error: "vendor_not_found" });
 
   try {
-    const result = await withVendorContext(vendor.id, () => handleIncomingMessage({
+    const { ConversationManager } = await import("../lib/intelligence/conversation-manager");
+    const result = await withVendorContext(vendor.id, () => ConversationManager.handleIncomingMessage(
       vendor,
-      fromPhone: body.data.customerPhone,
-      fromName: body.data.customerName ?? body.data.customerPhone,
-      body: body.data.body,
-    }));
+      body.data.customerPhone,
+      body.data.body
+    ));
 
     return res.json({
       ok: true,
-      botReply: result.botReply,
-      conversationId: result.conversation?.id ?? null,
-      isAdmin: result.isAdmin,
-      adminNotification: result.adminNotification,
+      botReply: result.text,
+      conversationId: null,
+      isAdmin: false,
+      adminNotification: false,
     });
   } catch (err: any) {
     req.log.error({ err }, "Simulator handling failed");
