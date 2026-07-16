@@ -1,58 +1,268 @@
-import { VendorRow } from "@workspace/db";
+import { VendorRow, db } from "@workspace/db";
 import { loadContext } from "./memory";
 import { buildSystemPrompt } from "./context";
 import { llmService } from "./llm";
 import { toolRegistry } from "./tools";
 import { logger } from "../logger";
 import { queueOutboundMessage } from "../queue";
+import { isAdminSender, handleAdminCommand, buildMenuMessage, recordMessage, findOrCreateConversation, paymentInstructions } from "../bot";
+import { getPendingOrder, clearPendingOrder } from "../pending-orders";
+import { ordersTable, vendorsTable, promotionsTable, conversationsTable } from "@workspace/db";
+import { eq, and, desc, notInArray } from "drizzle-orm";
+
+type DeterministicResult = { text: string | null; buttons?: Array<{id: string; title: string}>; list?: any; ruleMatched: string } | null;
+
+async function tryDeterministicMatch(
+  vendor: VendorRow,
+  customerPhone: string,
+  message: string,
+  isAdmin: boolean
+): Promise<DeterministicResult> {
+  let normalized = message.trim().toLowerCase();
+  normalized = normalized.replace(/[.,!?…]+$/, "");
+  normalized = normalized.replace(/\s+/g, " ");
+
+  if (["👍", "🙏", "✅"].includes(normalized)) normalized = "yes";
+  if (["👎", "❌"].includes(normalized)) normalized = "no";
+
+  if (isAdmin) {
+    if (message === "orders") {
+      return { ...(await handleAdminCommand(vendor, "orders")), ruleMatched: "admin_orders" };
+    }
+    if (message.startsWith("/promo list")) {
+      const promos = await db.select().from(promotionsTable).where(and(eq(promotionsTable.vendorId, vendor.id), eq(promotionsTable.active, true)));
+      if (promos.length === 0) return { text: "No active promotions found.", ruleMatched: "admin_promo_list" };
+      return { text: "Active Promos:\n" + promos.map(p => `- ${p.title}`).join("\n"), ruleMatched: "admin_promo_list" };
+    }
+    if (message.startsWith("/bot on")) {
+      await db.update(vendorsTable).set({ botEnabled: true }).where(eq(vendorsTable.id, vendor.id));
+      return { text: "Bot is now enabled for this vendor.", ruleMatched: "admin_bot_on" };
+    }
+    if (message.startsWith("/bot off")) {
+      await db.update(vendorsTable).set({ botEnabled: false }).where(eq(vendorsTable.id, vendor.id));
+      return { text: "Bot is now disabled for this vendor.", ruleMatched: "admin_bot_off" };
+    }
+    if (message.startsWith("/admin")) {
+      return {
+        text: "Admin Commands:",
+        buttons: [
+          { id: "orders", title: "View Pending Orders" },
+          { id: "/promo list", title: "View Promos" },
+          { id: "/bot on", title: "Bot ON (Enable)" },
+          { id: "/bot off", title: "Bot OFF (Disable)" }
+        ],
+        ruleMatched: "admin_help"
+      };
+    }
+    if (message.startsWith("/debug")) {
+      return { text: "Debug info: " + vendor.id, ruleMatched: "admin_debug" };
+    }
+    if (message.startsWith("/reset")) {
+      await clearPendingOrder(vendor.id, customerPhone);
+      return { text: "Cart and pending state cleared for your number.", ruleMatched: "admin_reset" };
+    }
+    if (message.startsWith("confirm ") || ["confirm", "confirm order", "yes confirm"].includes(normalized)) {
+      if (message.startsWith("confirm ")) return { ...(await handleAdminCommand(vendor, message)), ruleMatched: "admin_confirm" };
+      return { text: "Please provide the order ID to confirm, e.g. confirm 1234", ruleMatched: "admin_confirm_missing_id" };
+    }
+    if (message.startsWith("reject ") || ["reject", "reject order", "cancel order"].includes(normalized)) {
+      if (message.startsWith("reject ")) return { ...(await handleAdminCommand(vendor, message)), ruleMatched: "admin_reject" };
+      return { text: "Please provide the order ID to reject, e.g. reject 1234", ruleMatched: "admin_reject_missing_id" };
+    }
+    if (message.startsWith("eta ") || message.startsWith("paid ")) {
+      return { ...(await handleAdminCommand(vendor, message)), ruleMatched: "admin_eta_or_paid" };
+    }
+    if (["payment confirmed", "confirm payment", "paid confirmed", "paid"].includes(normalized)) {
+      return { text: "Please provide the order ID to confirm payment, e.g. paid 1234", ruleMatched: "admin_paid_missing_id" };
+    }
+    if (["on the way", "out for delivery", "delivered", "ready for pickup", "picked up"].includes(normalized)) {
+      return { text: `Please use the exact command with the order ID to update status, e.g. "eta 1234 15 mins"`, ruleMatched: "admin_status_update" };
+    }
+  }
+
+  if (message.startsWith("/reset")) {
+      await clearPendingOrder(vendor.id, customerPhone);
+      return { text: "Your pending order and cart have been cleared. What would you like to do next?", ruleMatched: "customer_reset" };
+    }
+
+    const greetings = ["hi", "hello", "hey", "hiya", "hi there", "hello there", "morning", "good morning", "afternoon", "good afternoon", "evening", "good evening", "menu", "start", "hi please", "good day"];
+    if (greetings.includes(normalized)) {
+      const menuResult = await buildMenuMessage(vendor);
+      return { text: `${vendor.welcomeMessage || "Welcome to " + vendor.name + "!"}\n\n${menuResult.text}`, list: menuResult.list, ruleMatched: "customer_greeting" };
+    }
+
+    const confirmations = ["yes", "y", "yeah", "yea", "yep", "yup", "ok", "okay", "k", "kk", "sure", "confirm", "confirmed", "alright", "aight", "correct", "that's correct", "that's right", "go ahead", "proceed", "ok o", "e correct", "na so", "abeg go ahead"];
+    if (confirmations.includes(normalized)) {
+      const pending = await getPendingOrder(vendor.id, customerPhone);
+      if (pending && pending.order && pending.order.resolvedItems && pending.order.resolvedItems.length > 0) {
+        const res = await toolRegistry.execute(vendor, customerPhone, { tool_name: "confirm_order", arguments: { delivery_type: "pickup" } });
+        return { text: res.message || "Order confirmed", ruleMatched: "customer_confirmation" };
+      }
+    }
+
+    const negatives = ["no", "n", "nope", "nah", "cancel", "stop", "don't", "dont", "never mind", "nevermind", "no o", "abeg no", "make we no do am"];
+    if (negatives.includes(normalized) || message === "cancel") {
+      const pending = await getPendingOrder(vendor.id, customerPhone);
+      if (pending && pending.order) {
+        await clearPendingOrder(vendor.id, customerPhone);
+        return { text: "Your pending order has been cancelled. Let me know if you need anything else.", ruleMatched: "customer_negative_cancel" };
+      }
+    }
+
+    const paymentClaims = ["paid", "i've paid", "i have paid", "ive paid", "payment done", "payment made", "payment sent", "sent payment", "just paid", "money sent", "don pay", "i don pay", "i don send am", "i just send am", "transfer don enter", "don transfer"];
+    if (paymentClaims.includes(normalized)) {
+      const [latestOrder] = await db.select().from(ordersTable).where(and(eq(ordersTable.vendorId, vendor.id), eq(ordersTable.customerPhone, customerPhone), eq(ordersTable.status, "confirmed"))).orderBy(desc(ordersTable.createdAt)).limit(1);
+      if (latestOrder) {
+        if (vendor.adminNumber && vendor.phoneNumberId) {
+          await queueOutboundMessage(vendor.phoneNumberId, vendor.adminNumber, `Customer ${customerPhone} claims they have paid for order #${latestOrder.shortId}.`);
+        }
+        return { text: "Thanks! We've notified the vendor. They will confirm your payment shortly.", ruleMatched: "customer_payment_claim" };
+      }
+    }
+
+    const paymentDetailsReq = ["account details", "what's the account number again", "whats the account number again", "account number", "how to pay", "where to pay"];
+    if (paymentDetailsReq.includes(normalized)) {
+       const activeOrders = await db.select().from(ordersTable).where(and(eq(ordersTable.vendorId, vendor.id), eq(ordersTable.customerPhone, customerPhone), eq(ordersTable.status, "awaiting_payment"))).orderBy(desc(ordersTable.createdAt));
+       if (activeOrders.length > 0) {
+         return { text: paymentInstructions(vendor, Number(activeOrders[0].total)), ruleMatched: "customer_payment_instructions_resend" };
+       }
+    }
+
+    const tracking = ["track", "track order", "track my order", "where is my order", "wetin dey happen to my order", "my order status", "order status", "status", "wetin be the update", "any update"];
+    if (tracking.includes(normalized)) {
+      const activeOrders = await db.select().from(ordersTable).where(and(eq(ordersTable.vendorId, vendor.id), eq(ordersTable.customerPhone, customerPhone), notInArray(ordersTable.status, ["delivered", "rejected", "cancelled"]))).orderBy(desc(ordersTable.createdAt));
+      
+      if (activeOrders.length === 0) {
+        return { text: "You don't have an active order right now.", ruleMatched: "customer_order_tracking" };
+      }
+      
+      if (activeOrders.length > 1) {
+        const orderList = activeOrders.map(o => `- #${o.shortId} (${o.status})`).join("\n");
+        return { text: `You have multiple active orders. Which one are you asking about?\n${orderList}`, ruleMatched: "customer_order_tracking" };
+      }
+      
+      const order = activeOrders[0];
+      let response = "";
+      if (order.status === "pending") response = `Your order #${order.shortId} is still awaiting confirmation from the vendor.`;
+      else if (order.status === "awaiting_payment") response = `Your order #${order.shortId} is confirmed! Please complete payment:\n\n${paymentInstructions(vendor, Number(order.total))}`;
+      else if (order.status === "payment_pending_confirmation") response = `We're confirming your payment for order #${order.shortId} now.`;
+      else if (order.status === "paid" || order.status === "confirmed") response = `Your order #${order.shortId} is being prepared. ${order.eta ? "ETA: " + order.eta : ""}`;
+      else if (order.status === "on_the_way") response = `Your order #${order.shortId} is on the way! ${order.eta ? "ETA: " + order.eta : ""}`;
+      
+      if ((order.status === "paid" || order.status === "confirmed") && !order.eta && vendor.adminNumber && vendor.phoneNumberId) {
+         await queueOutboundMessage(vendor.phoneNumberId, vendor.adminNumber, `Customer ${customerPhone} is asking for an ETA for order #${order.shortId}. Reply with "eta ${order.shortId} 15 mins"`);
+      }
+      
+      return { text: response, ruleMatched: "customer_order_tracking" };
+    }
+
+    const help = ["help", "agent", "human", "talk to someone", "real person", "i need help", "i want to talk to person", "abeg call person", "i wan talk to human"];
+    if (help.includes(normalized)) {
+      await db.update(conversationsTable).set({ status: "human" }).where(and(eq(conversationsTable.vendorId, vendor.id), eq(conversationsTable.customerPhone, customerPhone)));
+      return { text: "I've flagged this conversation for a human agent. They will reply as soon as possible.", ruleMatched: "customer_help" };
+    }
+
+    const restarts = ["restart", "start over", "start again", "cancel my order", "cancel order"];
+    if (restarts.includes(normalized)) {
+      await clearPendingOrder(vendor.id, customerPhone);
+      return { text: "Okay, we've started over. Let me know what you need.", ruleMatched: "customer_restart" };
+    }
+
+  if (/^\d+$/.test(normalized)) {
+    return null; 
+  }
+
+  return null;
+}
 
 export class ConversationManager {
-  
   static async handleIncomingMessage(
     vendor: VendorRow,
     customerPhone: string,
     message: string,
-    customerName?: string
-  ): Promise<{ text: string | null }> {
-    
-    // Check for system commands
-    if (message.startsWith("/admin") || message.startsWith("/debug") || message.startsWith("/reset")) {
-      logger.info("System command detected. Bypassing LLM.");
-      // Handle system commands directly (legacy style)
-      return { text: "System commands temporarily disabled." };
-    }
-
+    customerName?: string,
+    receivedAt?: number
+  ): Promise<{ text: string | null; buttons?: any[]; list?: any }> {
     try {
-      // 1. Gather context
-      const memory = await loadContext(vendor, customerPhone, customerName);
+      const isAdmin = await isAdminSender(vendor, customerPhone);
+      
+      const deterministicMatch = await tryDeterministicMatch(vendor, customerPhone, message, isAdmin);
+      
+      const conversation = await findOrCreateConversation(vendor, customerPhone, customerName || "Customer");
+      await recordMessage(conversation.id, "in", isAdmin ? "admin" : "customer", message);
+      
+      if (deterministicMatch) {
+        logger.info({ phone: customerPhone, ruleMatched: deterministicMatch.ruleMatched, path: "deterministic" }, "Handled deterministically");
+        if (deterministicMatch.text && vendor.phoneNumberId) {
+          await queueOutboundMessage(
+            vendor.phoneNumberId, 
+            customerPhone, 
+            deterministicMatch.text,
+            undefined, 
+            deterministicMatch.buttons, 
+            deterministicMatch.list,
+            { receivedAt: receivedAt || Date.now(), llmDuration: 0, dbDuration: 0 }
+          );
+          await recordMessage(conversation.id, "out", "bot", deterministicMatch.text);
+        }
+        return deterministicMatch;
+      }
 
-      // 2. Build Prompt
+      const memory = await loadContext(vendor, customerPhone, customerName);
       const systemPrompt = await buildSystemPrompt(vendor, memory);
 
-      // 3. Query LLM via LLMRouter (handles retries, circuit breaking, fallbacks internally)
+      const llmStart = Date.now();
       const response = await llmService.generate(systemPrompt, message, { vendorId: vendor.id });
+      const llmDuration = Date.now() - llmStart;
 
       if (!response) {
         throw new Error("Failed to generate LLM response.");
       }
 
-      // 4. Validate & Execute Tools
-      const toolResults = [];
+      logger.info({ phone: customerPhone, path: "llm" }, "Handled via LLM");
+
+      const dbStart = Date.now();
+      const toolPromises = [];
       if (response.actions && response.actions.length > 0) {
         for (const action of response.actions) {
-          const result = await toolRegistry.execute(vendor, customerPhone, action);
-          toolResults.push(result);
+          toolPromises.push(toolRegistry.execute(vendor, customerPhone, action));
         }
       }
 
-      // 5. Queue Outbound Response (for real webhooks)
+      const toolResults = await Promise.all(toolPromises).catch((err) => {
+        logger.error({ err }, "Tool Execution Error");
+        return [];
+      });
+
+      const dbDuration = Date.now() - dbStart;
+      logger.info({ dbDuration, vendorId: vendor.id }, "DB Tool Writes Latency");
+
+      let finalButtons = response.buttons;
+      let finalList = response.list;
+      for (const res of toolResults) {
+        if (res && res.buttons) finalButtons = res.buttons;
+        if (res && res.list) finalList = res.list;
+      }
+
+      let queuePromise = Promise.resolve();
       if (response.assistant_response && vendor.phoneNumberId) {
-         await queueOutboundMessage(vendor.phoneNumberId, customerPhone, response.assistant_response);
+         queuePromise = queueOutboundMessage(
+           vendor.phoneNumberId, 
+           customerPhone, 
+           response.assistant_response,
+           undefined, 
+           finalButtons, 
+           finalList,
+           { receivedAt: receivedAt || Date.now(), llmDuration, dbDuration }
+         );
+         await recordMessage(conversation.id, "out", "bot", response.assistant_response);
       }
       
-      return { text: response.assistant_response };
-    } catch (error) {
-      logger.error({ error }, "ConversationManager Error:");
+      await queuePromise;
+
+      return { text: response.assistant_response, buttons: finalButtons, list: finalList };
+    } catch (error: any) {
+      logger.error({ errMessage: error?.message, stack: error?.stack, error }, "ConversationManager Error:");
       if (vendor.phoneNumberId) {
         await queueOutboundMessage(
           vendor.phoneNumberId, 

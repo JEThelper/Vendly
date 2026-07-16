@@ -106,7 +106,7 @@ async function listActivePromotions(vendor: VendorRow) {
     .limit(3);
 }
 
-async function buildMenuMessage(vendor: VendorRow): Promise<{ text: string; list?: NonNullable<BotReply["list"]> }> {
+export async function buildMenuMessage(vendor: VendorRow): Promise<{ text: string; list?: NonNullable<BotReply["list"]> }> {
   const items = await listActiveMenuItems(vendor);
 
   if (items.length === 0) {
@@ -1037,7 +1037,7 @@ function resolveOrderRequest(
 
   return { type: "not_found", originalText: req.name, quantity: req.quantity };
 }
-function paymentInstructions(vendor: VendorRow, total: number): string {
+export function paymentInstructions(vendor: VendorRow, total: number): string {
   if (vendor.bankName && vendor.bankAccountNumber) {
     return [
       `*Payment instructions*`,
@@ -1054,7 +1054,7 @@ function paymentInstructions(vendor: VendorRow, total: number): string {
   return `Total: ${formatMoney(total, vendor.currency)}. Reply *paid* once you have completed payment.`;
 }
 
-async function findOrCreateConversation(
+export async function findOrCreateConversation(
   vendor: VendorRow,
   customerPhone: string,
   customerName: string,
@@ -1168,7 +1168,7 @@ async function upsertCustomer(
     });
 }
 
-async function recordMessage(
+export async function recordMessage(
   conversationId: string,
   direction: "in" | "out",
   sender: "customer" | "bot" | "vendor" | "system",
@@ -2201,10 +2201,25 @@ export async function handleAdminCommand(
     return await handleAdminRejectOrder(vendor, id);
   }
 
-  // paid [id] — delegate to shared intent handler
+  // paid [id]
   if (lower === "paid" || lower.startsWith("paid ")) {
     const id = body.slice(4).trim() || null;
     return await handleAdminConfirmPayment(vendor, id);
+  }
+
+  if (lower.startsWith("not_paid ")) {
+    const id = body.slice(9).trim() || null;
+    return await handleAdminPaymentNotReceived(vendor, id);
+  }
+
+  if (lower.startsWith("ontheway ")) {
+    const id = body.slice(9).trim() || null;
+    return await handleAdminOnTheWay(vendor, id);
+  }
+
+  if (lower.startsWith("delivered ")) {
+    const id = body.slice(10).trim() || null;
+    return await handleAdminDelivered(vendor, id);
   }
 
   // eta [id] [time]
@@ -2475,19 +2490,14 @@ async function handleAdminConfirmOrder(
     .where(eq(ordersTable.id, order.id));
 
   // Step 1: Send explicit order confirmation message
+  await db.update(ordersTable).set({ status: "awaiting_payment" }).where(eq(ordersTable.id, order.id));
   await notifyCustomer(
     vendor,
     order.customerPhone,
-    `✅ *Your order #${order.shortId} has been confirmed!*\n\nThe vendor is getting everything ready for you.`,
-  );
-
-  // Step 2: Send payment instructions
-  await notifyCustomer(
-    vendor,
-    order.customerPhone,
-    paymentInstructions(vendor, Number(order.total)),
+    `✅ *Your order #${order.shortId} has been confirmed!*\n\n${paymentInstructions(vendor, Number(order.total))}`,
     [{ id: "paid", title: "I Have Paid" }, { id: "cancel", title: "Cancel Order" }]
   );
+
   return {
     text: `Confirmed #${order.shortId} for ${order.customerName}. Confirmation + payment instructions sent to the customer.`,
   };
@@ -2516,6 +2526,42 @@ async function handleAdminRejectOrder(
   return {
     text: `Rejected #${order.shortId}. The customer was notified.`,
   };
+}
+
+export async function handleAdminPaymentNotReceived(vendor: VendorRow, orderId: string | null): Promise<AdminReply> {
+  const order = orderId ? await findOrderByShortId(vendor.id, orderId) : await findLatestConfirmedOrder(vendor.id);
+  if (!order) return { text: `No matching order.` };
+  
+  await db.update(ordersTable).set({ paymentStatus: "pending", status: "awaiting_payment" }).where(eq(ordersTable.id, order.id));
+  
+  await notifyCustomer(vendor, order.customerPhone, `We haven't received your payment for order #${order.shortId} yet. Please check and try again, or let us know if there is an issue.`);
+  
+  return { text: `Notified customer that payment for #${order.shortId} was not received.` };
+}
+
+export async function handleAdminOnTheWay(vendor: VendorRow, orderId: string | null): Promise<AdminReply> {
+  const order = orderId ? await findOrderByShortId(vendor.id, orderId) : await findLatestConfirmedOrder(vendor.id);
+  if (!order) return { text: `No matching order.` };
+  
+  await db.update(ordersTable).set({ status: "on_the_way" }).where(eq(ordersTable.id, order.id));
+  
+  const msg = order.deliveryType === "pickup" ? `Your order #${order.shortId} is Ready for Pickup!` : `Your order #${order.shortId} is On The Way!`;
+  await notifyCustomer(vendor, order.customerPhone, msg);
+  
+  return { 
+    text: `Marked #${order.shortId} as on_the_way.`,
+    buttons: [{ id: `delivered ${order.shortId}`, title: order.deliveryType === "pickup" ? "Picked Up" : "Delivered" }]
+  };
+}
+
+export async function handleAdminDelivered(vendor: VendorRow, orderId: string | null): Promise<AdminReply> {
+  const order = orderId ? await findOrderByShortId(vendor.id, orderId) : await findLatestConfirmedOrder(vendor.id);
+  if (!order) return { text: `No matching order.` };
+  
+  await db.update(ordersTable).set({ status: "delivered" }).where(eq(ordersTable.id, order.id));
+  await notifyCustomer(vendor, order.customerPhone, `Your order #${order.shortId} has been ${order.deliveryType === "pickup" ? "picked up" : "delivered"}. Enjoy!`);
+  
+  return { text: `Marked #${order.shortId} as delivered.` };
 }
 
 async function handleAdminConfirmPayment(

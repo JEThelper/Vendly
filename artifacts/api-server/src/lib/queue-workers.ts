@@ -44,7 +44,8 @@ export async function setupQueueWorkers(): Promise<void> {
         vendor,
         data.fromPhone,
         data.body,
-        data.fromName
+        data.fromName,
+        data.timestamp
       ));
 
       logger.debug({ jobId: job.id, phone: data.fromPhone }, "Incoming message processed successfully");
@@ -65,7 +66,8 @@ export async function setupQueueWorkers(): Promise<void> {
 
     try {
       logger.debug({ jobId: job.id, to: data.to }, "Sending outbound message");
-
+      
+      const sendStart = Date.now();
       const result = await sendWhatsAppMessage({
         phoneNumberId: data.phoneNumberId,
         to: data.to,
@@ -74,6 +76,20 @@ export async function setupQueueWorkers(): Promise<void> {
         buttons: data.buttons,
         list: data.list,
       });
+      const whatsappSendDuration = Date.now() - sendStart;
+      
+      if (data.metrics?.receivedAt) {
+        const e2eDuration = Date.now() - data.metrics.receivedAt;
+        logger.info({
+          jobId: job.id,
+          to: data.to,
+          whatsappSendDurationMs: whatsappSendDuration,
+          llmDurationMs: data.metrics.llmDuration,
+          dbDurationMs: data.metrics.dbDuration,
+          endToEndDurationMs: e2eDuration,
+          success: result.ok && result.delivered
+        }, "Message end-to-end latency metrics");
+      }
 
       if (!result.ok || !result.delivered) {
         logger.warn(

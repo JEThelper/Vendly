@@ -52,6 +52,7 @@ router.get("/webhook/messages", (req, res) => {
 router.post("/webhook/messages", async (req, res) => {
   // SECURITY: Validate webhook signature (X-Hub-Signature-256 header)
   // This ensures the request is genuinely from Meta
+  const receivedAt = Date.now();
   const signature = req.get("X-Hub-Signature-256");
   const rawBody = (req as any).rawBody || JSON.stringify(req.body);
   const appSecret = process.env.WHATSAPP_APP_SECRET;
@@ -168,6 +169,7 @@ router.post("/webhook/messages", async (req, res) => {
                   msg.from,
                   profileName,
                   bodyText,
+                  receivedAt
                 );
                 logger.info({ vendorId: vendor.id, phone: msg.from }, "Successfully queued incoming message");
                 

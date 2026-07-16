@@ -28,22 +28,6 @@ export interface IncomingMessageJob {
   attempt: number;
 }
 
-export interface OutboundMessageJob {
-  phoneNumberId: string;
-  to: string;
-  text: string;
-  timestamp: number;
-  attempt: number;
-  idempotencyKey?: string;
-  buttons?: Array<{ id: string; title: string }>;
-  list?: {
-    buttonText: string;
-    sections: Array<{
-      title: string;
-      rows: Array<{ id: string; title: string; description?: string }>;
-    }>;
-  };
-}
 
 export interface BroadcastMessageJob {
   vendorId: string;
@@ -167,6 +151,7 @@ export async function queueIncomingMessage(
   fromPhone: string,
   fromName: string,
   body: string,
+  receivedAt?: number,
 ): Promise<void> {
   const jobPromise = incomingQueue.add(
     {
@@ -174,7 +159,7 @@ export async function queueIncomingMessage(
       fromPhone,
       fromName,
       body,
-      timestamp: Date.now(),
+      timestamp: receivedAt ?? Date.now(),
       attempt: 1,
     } as IncomingMessageJob,
     {
@@ -190,10 +175,29 @@ export async function queueIncomingMessage(
   await Promise.race([jobPromise, timeoutPromise]);
 }
 
-/**
- * Add outbound message to send queue
- * Ensures delivery with retries
- */
+export interface OutboundMessageJob {
+  phoneNumberId: string;
+  to: string;
+  text: string;
+  timestamp: number;
+  attempt: number;
+  idempotencyKey?: string;
+  buttons?: Array<{ id: string; title: string }>;
+  list?: {
+    buttonText: string;
+    sections: Array<{
+      title: string;
+      rows: Array<{ id: string; title: string; description?: string }>;
+    }>;
+  };
+  metrics?: {
+    receivedAt: number;
+    llmDuration: number;
+    dbDuration: number;
+  };
+}
+
+// ... skipped ...
 export async function queueOutboundMessage(
   phoneNumberId: string,
   to: string,
@@ -207,8 +211,9 @@ export async function queueOutboundMessage(
       rows: Array<{ id: string; title: string; description?: string }>;
     }>;
   },
+  metrics?: { receivedAt: number; llmDuration: number; dbDuration: number },
 ): Promise<void> {
-  logger.info({ phoneNumberId, to }, "Enqueueing outbound message with vendor phoneNumberId");
+  logger.info({ phoneNumberId, to, metrics }, "Enqueueing outbound message with vendor phoneNumberId");
   await outboundQueue.add(
     {
       phoneNumberId,
@@ -219,6 +224,7 @@ export async function queueOutboundMessage(
       idempotencyKey,
       buttons,
       list,
+      metrics,
     } as OutboundMessageJob,
     {
       priority: 1,  // High priority for customer-facing messages

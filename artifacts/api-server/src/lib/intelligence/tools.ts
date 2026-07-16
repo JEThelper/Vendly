@@ -4,11 +4,14 @@ import { eq, and, ilike } from "drizzle-orm";
 import { logger } from "../logger";
 import { setPendingOrder, getPendingOrder, clearPendingOrder, PendingResolvedItem } from "../pending-orders";
 import { generateOrderIdempotencyKey, checkIdempotencyKey, recordIdempotencyKey } from "../idempotency";
+import { queueOutboundMessage } from "../queue";
 
 export type ToolResult = {
   success: boolean;
   message?: string;
   data?: any;
+  buttons?: Array<{ id: string; title: string }>;
+  list?: any;
 };
 
 export type ToolHandler = (vendor: VendorRow, customerPhone: string, args: any) => Promise<ToolResult>;
@@ -64,7 +67,6 @@ toolRegistry.register("add_to_cart", async (vendor, customerPhone, args: { item_
   
   if (quantity <= 0) return { success: false, message: "Quantity must be greater than 0." };
 
-  // Verify item exists and is active
   const item = await db.query.menuItemsTable.findFirst({
     where: and(
       eq(menuItemsTable.id, item_id), 
@@ -75,11 +77,9 @@ toolRegistry.register("add_to_cart", async (vendor, customerPhone, args: { item_
 
   if (!item) return { success: false, message: "Item not found or unavailable." };
 
-  // Get current pending order
   const pending = await getPendingOrder(vendor.id, customerPhone);
   let resolvedItems: PendingResolvedItem[] = pending.order?.resolvedItems || [];
   
-  // Add or update
   const existingIndex = resolvedItems.findIndex(i => i.menuItemId === item_id);
   if (existingIndex >= 0) {
     resolvedItems[existingIndex].quantity += quantity;
@@ -166,7 +166,7 @@ toolRegistry.register("confirm_order", async (vendor, customerPhone, args: { pay
     .values({
       vendorId: vendor.id,
       customerPhone,
-      customerName: customerPhone, // Default to phone if name unknown here
+      customerName: customerPhone, 
       status: "pending",
       paymentStatus: "pending",
       deliveryType: args.delivery_type || "pickup",
@@ -184,8 +184,79 @@ toolRegistry.register("confirm_order", async (vendor, customerPhone, args: { pay
   if (order) {
     await recordIdempotencyKey(idempotencyKey, order.id, "order");
     await clearPendingOrder(vendor.id, customerPhone);
-    return { success: true, message: `Order #${order.shortId} confirmed!`, data: { orderId: order.id, shortId: order.shortId } };
+
+    // Notify Admin
+    if (vendor.adminNumber && vendor.phoneNumberId) {
+      let adminMsg = `New Order #${order.shortId} from ${customerPhone}\n`;
+      adminMsg += `Type: ${order.deliveryType}\n`;
+      if (order.deliveryLocation) adminMsg += `Location: ${order.deliveryLocation}\n`;
+      if (vendor.deliveryLocations && vendor.deliveryLocations.length > 0 && order.deliveryLocation && !vendor.deliveryLocations.includes(order.deliveryLocation)) {
+         adminMsg += `\n⚠️ Note: Customer's address may be outside usual delivery area.\n`;
+      }
+      adminMsg += `\nItems:\n` + orderItems.map(oi => `${oi.quantity}x ${oi.itemName}`).join("\n");
+      adminMsg += `\nTotal: ${vendor.currency} ${totalAmount.toFixed(2)}`;
+
+      await queueOutboundMessage(vendor.phoneNumberId, vendor.adminNumber, adminMsg, undefined, [
+        { id: `confirm ${order.shortId}`, title: "Confirm Order" },
+        { id: `reject ${order.shortId}`, title: "Reject Order" }
+      ]);
+    }
+
+    return { 
+      success: true, 
+      message: `Your order has been sent to ${vendor.name} for confirmation. You will be notified shortly!`, 
+      data: { orderId: order.id, shortId: order.shortId } 
+    };
   }
 
   return { success: false, message: "Failed to create order in database." };
+});
+
+toolRegistry.register("cancel_order", async (vendor, customerPhone, args: { order_id: string }) => {
+  const { order_id } = args;
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(order_id);
+  const order = await db.query.ordersTable.findFirst({
+    where: and(isUuid ? eq(ordersTable.id, order_id) : eq(ordersTable.shortId, order_id), eq(ordersTable.customerPhone, customerPhone))
+  });
+  
+  if (!order) return { success: false, message: "Order not found." };
+  if (order.status === "cancelled" || order.status === "rejected") return { success: true, message: "Order is already cancelled." };
+  
+  await db.update(ordersTable).set({ status: "cancelled" }).where(eq(ordersTable.id, order.id));
+  
+  if (vendor.adminNumber && vendor.phoneNumberId) {
+    await queueOutboundMessage(vendor.phoneNumberId, vendor.adminNumber, `Customer ${customerPhone} cancelled order #${order.shortId}.`);
+  }
+  return { success: true, message: `Order #${order.shortId} has been successfully cancelled.` };
+});
+
+toolRegistry.register("modify_pending_order", async (vendor, customerPhone, args: { order_id: string, modification_details: string }) => {
+  const { order_id, modification_details } = args;
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(order_id);
+  const order = await db.query.ordersTable.findFirst({
+    where: and(isUuid ? eq(ordersTable.id, order_id) : eq(ordersTable.shortId, order_id), eq(ordersTable.customerPhone, customerPhone))
+  });
+  
+  if (!order) return { success: false, message: "Order not found." };
+  if (order.status !== "pending") return { success: false, message: "Order is no longer pending and cannot be directly modified." };
+
+  if (vendor.adminNumber && vendor.phoneNumberId) {
+    await queueOutboundMessage(vendor.phoneNumberId, vendor.adminNumber, `Customer ${customerPhone} wants to modify pending order #${order.shortId}:\n"${modification_details}"`);
+  }
+  return { success: true, message: `We've requested the vendor to update your order #${order.shortId} with: ${modification_details}` };
+});
+
+toolRegistry.register("flag_to_admin", async (vendor, customerPhone, args: { order_id: string, reason: string }) => {
+  const { order_id, reason } = args;
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(order_id);
+  const order = await db.query.ordersTable.findFirst({
+    where: and(isUuid ? eq(ordersTable.id, order_id) : eq(ordersTable.shortId, order_id), eq(ordersTable.customerPhone, customerPhone))
+  });
+  
+  if (!order) return { success: false, message: "Order not found." };
+  
+  if (vendor.adminNumber && vendor.phoneNumberId) {
+    await queueOutboundMessage(vendor.phoneNumberId, vendor.adminNumber, `⚠️ Flagged by customer ${customerPhone} for order #${order.shortId} (Status: ${order.status}):\n"${reason}"\n\nNeeds human handling.`);
+  }
+  return { success: true, message: `I have notified the vendor directly regarding this issue with order #${order.shortId}. They will assist you shortly.` };
 });
