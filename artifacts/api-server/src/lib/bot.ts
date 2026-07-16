@@ -2264,7 +2264,7 @@ If they're asking about something you can help with (order status, menu info, bu
 If they seem to want to perform an action, tell them the right command to use.
 Reply directly as the bot assistant. No JSON, just the text response.`;
 
-    const aiChat = await runLLM(adminChatPrompt);
+    const aiChat = undefined; // runLLM is removed
     if (aiChat) {
       return { text: aiChat };
     }

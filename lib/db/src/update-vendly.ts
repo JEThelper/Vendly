@@ -1,6 +1,6 @@
 import { db } from "@workspace/db";
 import { vendorsTable } from "@workspace/db/schema";
-import { eq, ilike } from "drizzle-orm";
+import { ilike } from "drizzle-orm";
 
 const states = [
   "Abia", "Adamawa", "Akwa Ibom", "Anambra", "Bauchi", "Bayelsa", "Benue", "Borno",

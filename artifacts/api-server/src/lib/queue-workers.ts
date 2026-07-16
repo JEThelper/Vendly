@@ -1,5 +1,5 @@
 import { incomingQueue, outboundQueue, broadcastQueue, IncomingMessageJob, OutboundMessageJob } from "./queue";
-import { handleIncomingMessage } from "./bot";
+
 import { sendWhatsAppMessage } from "./whatsapp";
 import { db, withVendorContext } from "@workspace/db";
 import { vendorsTable } from "@workspace/db";
@@ -38,13 +38,13 @@ export async function setupQueueWorkers(): Promise<void> {
         throw new Error("Vendor not found");
       }
 
-      // Process the message
-      await withVendorContext(vendor.id, () => handleIncomingMessage({
+      // Process the message through the new LLM-first intelligence layer
+      const { ConversationManager } = await import("./intelligence/conversation-manager");
+      await withVendorContext(vendor.id, () => ConversationManager.handleIncomingMessage(
         vendor,
-        fromPhone: data.fromPhone,
-        fromName: data.fromName,
-        body: data.body,
-      }));
+        data.fromPhone,
+        data.body
+      ));
 
       logger.debug({ jobId: job.id, phone: data.fromPhone }, "Incoming message processed successfully");
     } catch (err) {
