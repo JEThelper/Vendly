@@ -143,7 +143,7 @@ toolRegistry.register("update_quantity", async (vendor, customerPhone, args: { i
   return { success: true, message: `Updated quantity to ${quantity}.`, data: { total } };
 });
 
-toolRegistry.register("confirm_order", async (vendor, customerPhone, args: { payment_method: string, delivery_type: string, delivery_address?: string }) => {
+toolRegistry.register("confirm_order", async (vendor, customerPhone, args: { payment_method: string, delivery_type: string, delivery_address?: string, payment_type?: string }) => {
   const pending = await getPendingOrder(vendor.id, customerPhone);
   
   if (!pending.order || pending.order.resolvedItems.length === 0) {
@@ -169,6 +169,7 @@ toolRegistry.register("confirm_order", async (vendor, customerPhone, args: { pay
       customerName: customerPhone, 
       status: "pending",
       paymentStatus: "pending",
+      paymentType: args.payment_type || args.payment_method || null,
       deliveryType: args.delivery_type || "pickup",
       deliveryLocation: args.delivery_address || null,
       total: totalAmount.toFixed(2),
@@ -188,6 +189,7 @@ toolRegistry.register("confirm_order", async (vendor, customerPhone, args: { pay
     // Notify Admin
     if (vendor.adminNumber && vendor.phoneNumberId) {
       let adminMsg = `New Order #${order.shortId} from ${customerPhone}\n`;
+      adminMsg += `Payment: ${order.paymentType || "Not specified"}\n`;
       adminMsg += `Type: ${order.deliveryType}\n`;
       if (order.deliveryLocation) adminMsg += `Location: ${order.deliveryLocation}\n`;
       if (vendor.deliveryLocations && vendor.deliveryLocations.length > 0 && order.deliveryLocation && !vendor.deliveryLocations.includes(order.deliveryLocation)) {

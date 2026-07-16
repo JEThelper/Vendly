@@ -28,6 +28,9 @@ export function toVendor(row: VendorRow) {
     followUpsEnabled: row.followUpsEnabled,
     requiresDeliveryAddress: row.requiresDeliveryAddress,
     deliveryLocations: row.deliveryLocations as string[] | null,
+    deliveryAvailable: row.deliveryAvailable,
+    pickupAvailable: row.pickupAvailable,
+    acceptedPaymentMethods: row.acceptedPaymentMethods as string[] | null,
     createdAt: row.createdAt.toISOString(),
   };
 }

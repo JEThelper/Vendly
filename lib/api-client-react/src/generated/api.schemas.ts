@@ -33,6 +33,9 @@ export interface Vendor {
   followUpsEnabled?: boolean;
   requiresDeliveryAddress?: boolean;
   deliveryLocations?: string[] | null;
+  deliveryAvailable?: boolean;
+  pickupAvailable?: boolean;
+  acceptedPaymentMethods?: string[];
   createdAt: string;
 }
 
@@ -67,6 +70,9 @@ export interface CreateVendorBody {
   welcomeMessage?: string;
   requiresDeliveryAddress?: boolean;
   deliveryLocations?: string[];
+  deliveryAvailable?: boolean;
+  pickupAvailable?: boolean;
+  acceptedPaymentMethods?: string[];
 }
 
 export interface UpdateVendorBody {
@@ -85,6 +91,9 @@ export interface UpdateVendorBody {
   welcomeMessage?: string;
   requiresDeliveryAddress?: boolean;
   deliveryLocations?: string[];
+  deliveryAvailable?: boolean;
+  pickupAvailable?: boolean;
+  acceptedPaymentMethods?: string[];
 }
 
 export interface MenuItem {

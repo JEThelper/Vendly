@@ -43,6 +43,9 @@ export default function VendorSettings({ vendorId }: { vendorId: string }) {
     botEnabled: true,
     requiresDeliveryAddress: true,
     deliveryLocations: "",
+    deliveryAvailable: true,
+    pickupAvailable: true,
+    acceptedPaymentMethods: ["bank_transfer", "cash_on_delivery", "pos"],
   });
 
   useEffect(() => {
@@ -62,6 +65,9 @@ export default function VendorSettings({ vendorId }: { vendorId: string }) {
         botEnabled: vendor.botEnabled ?? true,
         requiresDeliveryAddress: vendor.requiresDeliveryAddress ?? true,
         deliveryLocations: vendor.deliveryLocations ? (vendor.deliveryLocations as string[]).join(", ") : "",
+        deliveryAvailable: vendor.deliveryAvailable ?? true,
+        pickupAvailable: vendor.pickupAvailable ?? true,
+        acceptedPaymentMethods: vendor.acceptedPaymentMethods ? (vendor.acceptedPaymentMethods as string[]) : ["bank_transfer", "cash_on_delivery", "pos"],
       });
     }
   }, [vendor?.id]);
@@ -96,6 +102,9 @@ export default function VendorSettings({ vendorId }: { vendorId: string }) {
           botEnabled: form.botEnabled,
           requiresDeliveryAddress: form.requiresDeliveryAddress,
           deliveryLocations: locations,
+          deliveryAvailable: form.deliveryAvailable,
+          pickupAvailable: form.pickupAvailable,
+          acceptedPaymentMethods: form.acceptedPaymentMethods,
         },
       });
       qc.invalidateQueries({ queryKey: getGetVendorQueryKey(vendorId) });
@@ -214,6 +223,24 @@ export default function VendorSettings({ vendorId }: { vendorId: string }) {
                 <p className="text-xs text-muted-foreground">Customers will see these locations when choosing delivery.</p>
               </div>
               
+              <div className="grid gap-6 md:grid-cols-2">
+                <div className="flex items-center justify-between p-4 rounded-xl border border-muted bg-background/50 mt-2">
+                  <div className="flex flex-col">
+                    <div className="font-bold text-foreground text-sm">Delivery Available</div>
+                    <div className="text-xs text-muted-foreground font-medium mt-0.5">Allow customers to choose delivery</div>
+                  </div>
+                  <Switch checked={form.deliveryAvailable} onCheckedChange={(v) => setForm({ ...form, deliveryAvailable: v })} />
+                </div>
+                
+                <div className="flex items-center justify-between p-4 rounded-xl border border-muted bg-background/50 mt-2">
+                  <div className="flex flex-col">
+                    <div className="font-bold text-foreground text-sm">Pickup Available</div>
+                    <div className="text-xs text-muted-foreground font-medium mt-0.5">Allow customers to choose pickup</div>
+                  </div>
+                  <Switch checked={form.pickupAvailable} onCheckedChange={(v) => setForm({ ...form, pickupAvailable: v })} />
+                </div>
+              </div>
+
               <div className="flex items-center justify-between p-4 rounded-xl border border-muted bg-background/50 mt-2">
                 <div className="flex flex-col">
                   <div className="font-bold text-foreground text-sm">Require Delivery Address</div>
@@ -274,6 +301,33 @@ export default function VendorSettings({ vendorId }: { vendorId: string }) {
                 <div className="grid gap-3">
                   <Label className="text-sm font-semibold">Account holder</Label>
                   <Input className="bg-background/50 border-muted focus-visible:ring-emerald-500 rounded-xl" value={form.bankAccountHolder} onChange={(e) => setForm({ ...form, bankAccountHolder: e.target.value })} />
+                </div>
+
+                <div className="grid gap-3 pt-2 border-t">
+                  <Label className="text-sm font-semibold">Accepted Payment Methods</Label>
+                  <div className="flex flex-col gap-3">
+                    {[
+                      { id: "bank_transfer", label: "Bank Transfer" },
+                      { id: "cash_on_delivery", label: "Cash on Delivery" },
+                      { id: "pos", label: "POS Terminal" }
+                    ].map(method => (
+                      <label key={method.id} className="flex items-center gap-3 p-3 rounded-xl border bg-background/50 cursor-pointer hover:bg-muted transition-colors">
+                        <input 
+                          type="checkbox" 
+                          className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-500"
+                          checked={form.acceptedPaymentMethods.includes(method.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setForm({ ...form, acceptedPaymentMethods: [...form.acceptedPaymentMethods, method.id] });
+                            } else {
+                              setForm({ ...form, acceptedPaymentMethods: form.acceptedPaymentMethods.filter(m => m !== method.id) });
+                            }
+                          }}
+                        />
+                        <span className="text-sm font-medium">{method.label}</span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
               </CardContent>
             </Card>

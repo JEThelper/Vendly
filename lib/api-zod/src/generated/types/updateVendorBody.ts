@@ -23,4 +23,7 @@ export interface UpdateVendorBody {
   welcomeMessage?: string;
   requiresDeliveryAddress?: boolean;
   deliveryLocations?: string[];
+  deliveryAvailable?: boolean;
+  pickupAvailable?: boolean;
+  acceptedPaymentMethods?: string[];
 }

@@ -24,5 +24,8 @@ export interface Vendor {
   followUpsEnabled?: boolean;
   requiresDeliveryAddress?: boolean;
   deliveryLocations?: string[] | null;
+  deliveryAvailable?: boolean;
+  pickupAvailable?: boolean;
+  acceptedPaymentMethods?: string[];
   createdAt: Date;
 }

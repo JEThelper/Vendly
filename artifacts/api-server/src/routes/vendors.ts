@@ -51,6 +51,9 @@ router.post("/vendors", async (req, res) => {
         welcomeMessage: data.welcomeMessage ?? null,
         requiresDeliveryAddress: data.requiresDeliveryAddress ?? false,
         deliveryLocations: data.deliveryLocations ?? [],
+        deliveryAvailable: data.deliveryAvailable ?? true,
+        pickupAvailable: data.pickupAvailable ?? true,
+        acceptedPaymentMethods: data.acceptedPaymentMethods ?? ["bank_transfer", "cash_on_delivery", "pos"],
       })
       .returning();
     return res.status(201).json(toVendor(created!));
@@ -159,6 +162,9 @@ router.patch("/vendors/:vendorId", async (req, res) => {
     "welcomeMessage",
     "requiresDeliveryAddress",
     "deliveryLocations",
+    "deliveryAvailable",
+    "pickupAvailable",
+    "acceptedPaymentMethods",
   ] as const) {
     if (body.data[k] !== undefined) updates[k] = body.data[k];
   }

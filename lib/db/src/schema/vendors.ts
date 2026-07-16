@@ -23,6 +23,9 @@ export const vendorsTable = pgTable("vendors", {
   welcomeMessage: text("welcome_message"),
   followUpsEnabled: boolean("follow_ups_enabled").notNull().default(false),
   requiresDeliveryAddress: boolean("requires_delivery_address").notNull().default(false),
+  deliveryAvailable: boolean("delivery_available").notNull().default(true),
+  pickupAvailable: boolean("pickup_available").notNull().default(true),
+  acceptedPaymentMethods: jsonb("accepted_payment_methods").$type<string[]>().default(["bank_transfer", "cash_on_delivery", "pos"]),
   deliveryLocations: jsonb("delivery_locations").$type<string[]>().default([]),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()

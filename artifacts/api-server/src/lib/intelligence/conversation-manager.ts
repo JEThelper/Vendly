@@ -6,9 +6,9 @@ import { toolRegistry } from "./tools";
 import { logger } from "../logger";
 import { queueOutboundMessage } from "../queue";
 import { isAdminSender, handleAdminCommand, buildMenuMessage, recordMessage, findOrCreateConversation, paymentInstructions } from "../bot";
-import { getPendingOrder, clearPendingOrder } from "../pending-orders";
+import { getPendingOrder, clearPendingOrder, setPendingOrder } from "../pending-orders";
 import { ordersTable, vendorsTable, promotionsTable, conversationsTable } from "@workspace/db";
-import { eq, and, desc, notInArray } from "drizzle-orm";
+import { eq, and, desc, inArray, notInArray } from "drizzle-orm";
 
 type DeterministicResult = { text: string | null; buttons?: Array<{id: string; title: string}>; list?: any; ruleMatched: string } | null;
 
@@ -100,20 +100,99 @@ async function tryDeterministicMatch(
 
     const greetings = ["hi", "hello", "hey", "hiya", "hi there", "hello there", "morning", "good morning", "afternoon", "good afternoon", "evening", "good evening", "menu", "start", "hi please", "good day"];
     if (greetings.includes(normalized)) {
+      const activeUnpaidOrders = await db.select().from(ordersTable).where(and(eq(ordersTable.vendorId, vendor.id), eq(ordersTable.customerPhone, customerPhone), inArray(ordersTable.status, ["pending", "awaiting_payment", "payment_pending_confirmation", "confirmed"]))).orderBy(desc(ordersTable.createdAt));
+      
+      if (activeUnpaidOrders.length > 0) {
+        const order = activeUnpaidOrders[0];
+        return {
+           text: `You have an existing order (#${order.shortId}) that is still in progress. Would you like to check its status, or cancel it to start a new one?`,
+           buttons: [
+             { id: `status`, title: "Check Status" },
+             { id: `cancel_order_${order.shortId}`, title: "Cancel Old Order" }
+           ],
+           ruleMatched: "customer_existing_order_reminder"
+        };
+      }
+
       const menuResult = await buildMenuMessage(vendor);
       return { text: `${vendor.welcomeMessage || "Welcome to " + vendor.name + "!"}\n\n${menuResult.text}`, list: menuResult.list, ruleMatched: "customer_greeting" };
     }
 
-    const confirmations = ["yes", "y", "yeah", "yea", "yep", "yup", "ok", "okay", "k", "kk", "sure", "confirm", "confirmed", "alright", "aight", "correct", "that's correct", "that's right", "go ahead", "proceed", "ok o", "e correct", "na so", "abeg go ahead"];
+    if (normalized.startsWith("cancel_order_")) {
+      const shortId = normalized.replace("cancel_order_", "");
+      const res = await toolRegistry.execute(vendor, customerPhone, { tool_name: "cancel_order", arguments: { order_id: shortId } });
+      await clearPendingOrder(vendor.id, customerPhone);
+      return { text: `${res.message}\n\nReply *menu* to start a new order.`, ruleMatched: "customer_cancel_old_order" };
+    }
+
+    const confirmations = ["yes", "y", "yeah", "yea", "yep", "yup", "ok", "okay", "k", "kk", "sure", "confirm", "confirmed", "alright", "aight", "correct", "that's correct", "that's right", "go ahead", "proceed", "ok o", "e correct", "na so", "abeg go ahead", "checkout"];
     if (confirmations.includes(normalized)) {
       const pending = await getPendingOrder(vendor.id, customerPhone);
       if (pending && pending.order && pending.order.resolvedItems && pending.order.resolvedItems.length > 0) {
-        const res = await toolRegistry.execute(vendor, customerPhone, { tool_name: "confirm_order", arguments: { delivery_type: "pickup" } });
-        return { text: res.message || "Order confirmed", ruleMatched: "customer_confirmation" };
+        if (!pending.order.pendingClarification) {
+          const acceptedMethods = vendor.acceptedPaymentMethods || ["bank_transfer", "cash_on_delivery", "pos"];
+          const buttons = acceptedMethods.slice(0, 3).map((m: string) => {
+             const titles: Record<string, string> = { "bank_transfer": "Bank Transfer", "cash_on_delivery": "Cash on Delivery", "pos": "POS Terminal" };
+             return { id: `pay_${m}`, title: titles[m] || m };
+          });
+          await setPendingOrder(vendor.id, customerPhone, pending.order.resolvedItems, { originalText: "awaiting_payment_type", quantity: 1, candidates: [], remaining: [] }, pending.order.total);
+          return { text: "How would you like to pay?", buttons, ruleMatched: "customer_checkout_payment" };
+        }
+      }
+    }
+
+    if (normalized.startsWith("pay_")) {
+      const pending = await getPendingOrder(vendor.id, customerPhone);
+      if (pending && pending.order && pending.order.pendingClarification?.originalText === "awaiting_payment_type") {
+        const paymentType = normalized.replace("pay_", "");
+        
+        // Update clarification to store payment type
+        const clarification = pending.order.pendingClarification;
+        clarification.remaining = [{ text: paymentType, quantity: 1 }]; // store payment type here
+        
+        if (vendor.deliveryAvailable && vendor.pickupAvailable) {
+           clarification.originalText = "awaiting_delivery_type";
+           await setPendingOrder(vendor.id, customerPhone, pending.order.resolvedItems, clarification, pending.order.total);
+           return { 
+             text: "Awesome! Would you like *Delivery* or *Pickup*?",
+             buttons: [ { id: "delivery", title: "Delivery" }, { id: "pickup", title: "Pickup" } ],
+             ruleMatched: "customer_checkout_delivery_type"
+           };
+        } else {
+           const deliveryType = vendor.deliveryAvailable ? "delivery" : "pickup";
+           const res = await toolRegistry.execute(vendor, customerPhone, { tool_name: "confirm_order", arguments: { delivery_type: deliveryType, payment_type: paymentType } });
+           return { text: res.message || "Order confirmed", ruleMatched: "customer_confirmation" };
+        }
+      }
+    }
+
+    const deliveryTypes = ["delivery", "pickup", "pick up"];
+    if (deliveryTypes.includes(normalized)) {
+      const pending = await getPendingOrder(vendor.id, customerPhone);
+      if (pending && pending.order && pending.order.pendingClarification?.originalText === "awaiting_delivery_type") {
+        const paymentType = pending.order.pendingClarification.remaining[0]?.text || "unknown";
+        if (normalized === "delivery" || normalized === "delivery") {
+          const locations = vendor.deliveryLocations && vendor.deliveryLocations.length > 0 ? vendor.deliveryLocations.join(", ") : "your address";
+          const clarification = pending.order.pendingClarification;
+          clarification.originalText = "awaiting_delivery_location";
+          await setPendingOrder(vendor.id, customerPhone, pending.order.resolvedItems, clarification, pending.order.total);
+          return { text: `We deliver to: ${locations}.\nWhere are you located? Please provide your delivery address.`, ruleMatched: "customer_checkout_delivery_location" };
+        } else {
+           const res = await toolRegistry.execute(vendor, customerPhone, { tool_name: "confirm_order", arguments: { delivery_type: "pickup", payment_type: paymentType } });
+           return { text: res.message || "Order confirmed", ruleMatched: "customer_confirmation" };
+        }
       }
     }
 
     const negatives = ["no", "n", "nope", "nah", "cancel", "stop", "don't", "dont", "never mind", "nevermind", "no o", "abeg no", "make we no do am"];
+
+    const pendingCheck = await getPendingOrder(vendor.id, customerPhone);
+    if (pendingCheck && pendingCheck.order && pendingCheck.order.pendingClarification?.originalText === "awaiting_delivery_location" && !negatives.includes(normalized) && normalized !== "cancel") {
+       const paymentType = pendingCheck.order.pendingClarification.remaining[0]?.text || "unknown";
+       const res = await toolRegistry.execute(vendor, customerPhone, { tool_name: "confirm_order", arguments: { delivery_type: "delivery", delivery_address: message, payment_type: paymentType } });
+       return { text: res.message || "Order confirmed", ruleMatched: "customer_confirmation_delivery" };
+    }
+
     if (negatives.includes(normalized) || message === "cancel") {
       const pending = await getPendingOrder(vendor.id, customerPhone);
       if (pending && pending.order) {

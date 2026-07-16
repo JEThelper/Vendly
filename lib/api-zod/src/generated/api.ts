@@ -81,6 +81,9 @@ export const ListVendorsResponseItem = zod.object({
   followUpsEnabled: zod.boolean().optional(),
   requiresDeliveryAddress: zod.boolean().optional(),
   deliveryLocations: zod.array(zod.string()).nullish(),
+  deliveryAvailable: zod.boolean().optional(),
+  pickupAvailable: zod.boolean().optional(),
+  acceptedPaymentMethods: zod.array(zod.string()).optional(),
   createdAt: zod.coerce.date(),
 });
 export const ListVendorsResponse = zod.array(ListVendorsResponseItem);
@@ -105,6 +108,9 @@ export const CreateVendorBody = zod.object({
   welcomeMessage: zod.string().optional(),
   requiresDeliveryAddress: zod.boolean().optional(),
   deliveryLocations: zod.array(zod.string()).optional(),
+  deliveryAvailable: zod.boolean().optional(),
+  pickupAvailable: zod.boolean().optional(),
+  acceptedPaymentMethods: zod.array(zod.string()).optional(),
 });
 
 /**
@@ -132,6 +138,9 @@ export const GetVendorResponse = zod
     followUpsEnabled: zod.boolean().optional(),
     requiresDeliveryAddress: zod.boolean().optional(),
     deliveryLocations: zod.array(zod.string()).nullish(),
+    deliveryAvailable: zod.boolean().optional(),
+    pickupAvailable: zod.boolean().optional(),
+    acceptedPaymentMethods: zod.array(zod.string()).optional(),
     createdAt: zod.coerce.date(),
   })
   .and(
@@ -172,6 +181,9 @@ export const UpdateVendorBody = zod.object({
   welcomeMessage: zod.string().optional(),
   requiresDeliveryAddress: zod.boolean().optional(),
   deliveryLocations: zod.array(zod.string()).optional(),
+  deliveryAvailable: zod.boolean().optional(),
+  pickupAvailable: zod.boolean().optional(),
+  acceptedPaymentMethods: zod.array(zod.string()).optional(),
 });
 
 export const UpdateVendorResponse = zod.object({
@@ -191,6 +203,9 @@ export const UpdateVendorResponse = zod.object({
   followUpsEnabled: zod.boolean().optional(),
   requiresDeliveryAddress: zod.boolean().optional(),
   deliveryLocations: zod.array(zod.string()).nullish(),
+  deliveryAvailable: zod.boolean().optional(),
+  pickupAvailable: zod.boolean().optional(),
+  acceptedPaymentMethods: zod.array(zod.string()).optional(),
   createdAt: zod.coerce.date(),
 });
 
