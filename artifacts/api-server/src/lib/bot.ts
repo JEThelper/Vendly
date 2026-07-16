@@ -459,7 +459,8 @@ async function buildPendingOrderState(
   const parsed = parseOrderLine(body);
   let requests = parsed;
   if (requests.length === 0) {
-    const aiItems = await aiExtractOrder(body);
+    const mappedItems = activeItems.map(item => ({ name: item.name, price: item.price.toString() }));
+    const aiItems = await aiExtractOrder(body, mappedItems);
     if (aiItems) {
       requests = aiItems.map((order) => ({ kind: "name", name: order.item, quantity: order.quantity }));
     }
