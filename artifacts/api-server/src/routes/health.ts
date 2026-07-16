@@ -67,6 +67,7 @@ router.get("/health/deep", async (_req, res) => {
             outbound: queueHealth.pendingOutbound,
           },
         },
+        llm: (await import("../lib/intelligence/llm")).llmService.getHealthStatus(),
       },
       memory: {
         heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),

@@ -1,7 +1,7 @@
 import { VendorRow } from "@workspace/db";
 import { loadContext } from "./memory";
 import { buildSystemPrompt } from "./context";
-import { processWithLLM } from "./llm";
+import { llmService } from "./llm";
 import { toolRegistry } from "./tools";
 import { logger } from "../logger";
 import { queueOutboundMessage } from "../queue";
@@ -28,8 +28,8 @@ export class ConversationManager {
       // 2. Build Prompt
       const systemPrompt = await buildSystemPrompt(vendor, memory);
 
-      // 3. Query LLM
-      const response = await processWithLLM(systemPrompt, message);
+      // 3. Query LLM via LLMRouter (handles retries, circuit breaking, fallbacks internally)
+      const response = await llmService.generate(systemPrompt, message, { vendorId: vendor.id });
 
       if (!response) {
         throw new Error("Failed to generate LLM response.");

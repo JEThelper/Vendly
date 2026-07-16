@@ -112,6 +112,20 @@ async function initializeProduction() {
       }
     }
 
+    // Initialize LLM Service
+    try {
+      const { llmService } = await import("./lib/intelligence/llm");
+      await llmService.initialize();
+      logger.info("LLM Provider architecture initialized");
+    } catch (err) {
+      if (process.env.NODE_ENV === "development") {
+        logger.warn({ err }, "LLM Provider initialization failed (development mode - continuing anyway)");
+      } else {
+        logger.error({ err }, "LLM Provider initialization failed. Check API keys and configuration.");
+        process.exit(1);
+      }
+    }
+
     // Schedule periodic cleanups
     scheduleIdempotencyKeyCleanup(3600000); // Every hour
     scheduleExpiredPendingOrdersCleanup(3600000); // Every hour
