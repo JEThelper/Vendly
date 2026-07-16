@@ -27,16 +27,16 @@ export function loadLLMConfig(): GlobalLLMConfig {
       name: "Gemini",
       model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
       apiKey: process.env.GEMINI_API_KEY,
-      timeoutMs: Number(process.env.GEMINI_TIMEOUT_MS || 10000),
-      maxRetries: Number(process.env.GEMINI_MAX_RETRIES || 2),
+      timeoutMs: Number(process.env.GEMINI_TIMEOUT_MS || 5000), // Reduced from 10000 to 5000
+      maxRetries: Number(process.env.GEMINI_MAX_RETRIES || 0), // Reduced from 2 to 0 to prefer fast failover
       temperature: 0.0,
     } : undefined,
     groq: process.env.GROQ_API_KEY ? {
       name: "Groq",
       model: process.env.GROQ_MODEL || "llama-3.1-8b-instant",
       apiKey: process.env.GROQ_API_KEY,
-      timeoutMs: Number(process.env.GROQ_TIMEOUT_MS || 10000),
-      maxRetries: Number(process.env.GROQ_MAX_RETRIES || 2),
+      timeoutMs: Number(process.env.GROQ_TIMEOUT_MS || 5000), // Reduced from 10000 to 5000
+      maxRetries: Number(process.env.GROQ_MAX_RETRIES || 0), // Reduced from 2 to 0
       temperature: 0.0,
     } : undefined,
   };

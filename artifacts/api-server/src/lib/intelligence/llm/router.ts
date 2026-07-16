@@ -91,7 +91,8 @@ export class LLMRouter {
     
     try {
       logger.info({ provider: activeProvider.name, ...metadata }, `[LLMRouter] Routing request...`);
-      return await this.executeWithRetries(activeProvider, systemPrompt, userMessage, 1);
+      const maxRetries = activeProvider.name === "Gemini" ? (this.config.gemini?.maxRetries ?? 0) : (this.config.groq?.maxRetries ?? 0);
+      return await this.executeWithRetries(activeProvider, systemPrompt, userMessage, maxRetries);
     } catch (primaryError) {
       logger.error({ error: primaryError, provider: activeProvider.name }, `[LLMRouter] Active provider failed completely.`);
       
@@ -99,7 +100,8 @@ export class LLMRouter {
       if (activeProvider === this.primary && this.fallback) {
         logger.warn({ fallback: this.fallback.name }, `[LLMRouter] Initiating failover...`);
         try {
-          return await this.executeWithRetries(this.fallback, systemPrompt, userMessage, 1);
+          const fallbackMaxRetries = this.fallback.name === "Gemini" ? (this.config.gemini?.maxRetries ?? 0) : (this.config.groq?.maxRetries ?? 0);
+          return await this.executeWithRetries(this.fallback, systemPrompt, userMessage, fallbackMaxRetries);
         } catch (fallbackError) {
           logger.error({ error: fallbackError, provider: this.fallback.name }, `[LLMRouter] Fallback provider also failed.`);
           throw fallbackError; // Both failed
