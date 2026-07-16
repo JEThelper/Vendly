@@ -70,6 +70,7 @@ export async function setupQueueWorkers(): Promise<void> {
         to: data.to,
         text: data.text,
         idempotencyKey: data.idempotencyKey,
+        buttons: data.buttons,
       });
 
       if (!result.ok || !result.delivered) {

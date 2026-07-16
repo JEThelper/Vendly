@@ -6,6 +6,7 @@ export type OutboundMessage = {
   to: string;
   text: string;
   idempotencyKey?: string;  // For retries
+  buttons?: Array<{ id: string; title: string }>;
 };
 
 export type SendMessageResult = {
@@ -68,8 +69,21 @@ export async function sendWhatsAppMessage(
         body: JSON.stringify({
           messaging_product: "whatsapp",
           to: msg.to,
-          type: "text",
-          text: { body: msg.text },
+          type: msg.buttons && msg.buttons.length > 0 ? "interactive" : "text",
+          ...(msg.buttons && msg.buttons.length > 0 ? {
+            interactive: {
+              type: "button",
+              body: { text: msg.text },
+              action: {
+                buttons: msg.buttons.map(b => ({
+                  type: "reply",
+                  reply: { id: b.id, title: b.title.slice(0, 20) } // Max 20 chars per Meta API
+                }))
+              }
+            }
+          } : {
+            text: { body: msg.text }
+          })
         }),
         signal: controller.signal,
       },

@@ -1233,17 +1233,35 @@ export async function handleIncomingMessage(args: {
     logger.info("After queueOutboundMessage");
   }
 
-  // Notify the vendor's admin number when a new order was just placed,
+  // Notify the vendor's admin numbers when a new order was just placed,
   // or when handover was requested.
   let adminNotification: string | null = null;
-  if (reply.adminAlert && vendor.adminNumber && vendor.phoneNumberId) {
+  if (reply.adminAlert && vendor.phoneNumberId) {
     adminNotification = reply.adminAlert;
-    // Queue admin notification as well
-    await queueOutboundMessage(
-      vendor.phoneNumberId,
-      vendor.adminNumber,
-      reply.adminAlert,
-    );
+    
+    // Collect all admin numbers
+    const adminPhones = new Set<string>();
+    if (vendor.adminNumber) adminPhones.add(vendor.adminNumber);
+    
+    const admins = await db
+      .select()
+      .from(vendorAdminsTable)
+      .where(eq(vendorAdminsTable.vendorId, vendor.id));
+      
+    for (const admin of admins) {
+      adminPhones.add(admin.phone);
+    }
+
+    // Queue admin notification to all admins
+    for (const phone of adminPhones) {
+      await queueOutboundMessage(
+        vendor.phoneNumberId,
+        phone,
+        reply.adminAlert,
+        undefined,
+        reply.adminAlertButtons,
+      );
+    }
   }
 
   return {
@@ -1258,6 +1276,7 @@ type BotReply = {
   text: string | null;
   handover: boolean;
   adminAlert?: string | null;
+  adminAlertButtons?: Array<{ id: string; title: string }>;
 };
 
 export async function getFrequentOrder(vendorId: string, customerPhone: string): Promise<OrderItem[] | null> {
@@ -1402,7 +1421,10 @@ async function computeBotReply(
     return {
       text: `Thanks! 🎉 We've notified the vendor of your payment — they'll confirm shortly.`,
       handover: false,
-      adminAlert: `Customer ${conversation.customerName} (${conversation.customerPhone}) reports payment for order #${target.shortId} (${formatMoney(Number(target.total), vendor.currency)}). Reply *paid ${target.shortId}* once verified.`,
+      adminAlert: `Customer ${conversation.customerName} (${conversation.customerPhone}) reports payment for order #${target.shortId} (${formatMoney(Number(target.total), vendor.currency)}).`,
+      adminAlertButtons: [
+        { id: `paid ${target.shortId}`, title: "Confirm Payment" }
+      ],
     };
   }
 
@@ -1492,12 +1514,16 @@ async function computeBotReply(
           )}`,
         );
       }
-      adminLines.push(``, `Total: ${formatMoney(pendingOrder.total, vendor.currency)}`, ``, `Reply *confirm ${order.shortId}* or *reject ${order.shortId}*.`);
+      adminLines.push(``, `Total: ${formatMoney(pendingOrder.total, vendor.currency)}`);
 
       return {
         text: lines.join("\n"),
         handover: false,
         adminAlert: adminLines.join("\n"),
+        adminAlertButtons: [
+          { id: `confirm ${order.shortId}`, title: "Confirm Order" },
+          { id: `reject ${order.shortId}`, title: "Reject Order" }
+        ],
       };
     }
 

@@ -95,6 +95,7 @@ router.post("/webhook/messages", async (req, res) => {
               id?: string;
               type?: string;
               text?: { body?: string };
+              interactive?: { type?: string; button_reply?: { id?: string; title?: string } };
             }>;
           };
           const phoneNumberId = v.metadata?.phone_number_id;
@@ -116,8 +117,16 @@ router.post("/webhook/messages", async (req, res) => {
           }
 
           for (const msg of messages) {
-            // Handle text messages
-            if (msg.type === "text" && msg.text?.body && msg.from) {
+            // Extract text body from either text message or interactive button reply
+            let bodyText = "";
+            if (msg.type === "text" && msg.text?.body) {
+              bodyText = msg.text.body;
+            } else if (msg.type === "interactive" && msg.interactive?.type === "button_reply" && msg.interactive.button_reply?.id) {
+              bodyText = msg.interactive.button_reply.id;
+            }
+
+            // Handle text and interactive messages
+            if (bodyText && msg.from) {
               // Deduplicate using Meta's message ID
               // WhatsApp retries webhook delivery, so we need to skip duplicates
               if (msg.id) {
@@ -154,7 +163,7 @@ router.post("/webhook/messages", async (req, res) => {
                   vendor.id,
                   msg.from,
                   profileName,
-                  msg.text.body,
+                  bodyText,
                 );
                 logger.info({ vendorId: vendor.id, phone: msg.from }, "Successfully queued incoming message");
                 
