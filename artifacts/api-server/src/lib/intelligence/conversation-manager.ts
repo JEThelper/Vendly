@@ -16,7 +16,8 @@ async function tryDeterministicMatch(
   vendor: VendorRow,
   customerPhone: string,
   message: string,
-  isAdmin: boolean
+  isAdmin: boolean,
+  incomingMessageId?: string
 ): Promise<DeterministicResult> {
   let normalized = message.trim().toLowerCase();
   normalized = normalized.replace(/[.,!?…]+$/, "");
@@ -27,7 +28,9 @@ async function tryDeterministicMatch(
 
   if (isAdmin) {
     if (message === "orders") {
-      return { ...(await handleAdminCommand(vendor, "orders")), ruleMatched: "admin_orders" };
+      const adminReply = await handleAdminCommand(vendor, "orders");
+      if (adminReply) return { ...adminReply, ruleMatched: "admin_orders" };
+      return null;
     }
     if (message.startsWith("/promo list")) {
       const promos = await db.select().from(promotionsTable).where(and(eq(promotionsTable.vendorId, vendor.id), eq(promotionsTable.active, true)));
@@ -62,15 +65,25 @@ async function tryDeterministicMatch(
       return { text: "Cart and pending state cleared for your number.", ruleMatched: "admin_reset" };
     }
     if (message.startsWith("confirm ") || ["confirm", "confirm order", "yes confirm"].includes(normalized)) {
-      if (message.startsWith("confirm ")) return { ...(await handleAdminCommand(vendor, message)), ruleMatched: "admin_confirm" };
+      if (message.startsWith("confirm ")) {
+        const adminReply = await handleAdminCommand(vendor, message);
+        if (adminReply) return { ...adminReply, ruleMatched: "admin_confirm" };
+        return null;
+      }
       return { text: "Please provide the order ID to confirm, e.g. confirm 1234", ruleMatched: "admin_confirm_missing_id" };
     }
     if (message.startsWith("reject ") || ["reject", "reject order", "cancel order"].includes(normalized)) {
-      if (message.startsWith("reject ")) return { ...(await handleAdminCommand(vendor, message)), ruleMatched: "admin_reject" };
+      if (message.startsWith("reject ")) {
+        const adminReply = await handleAdminCommand(vendor, message);
+        if (adminReply) return { ...adminReply, ruleMatched: "admin_reject" };
+        return null;
+      }
       return { text: "Please provide the order ID to reject, e.g. reject 1234", ruleMatched: "admin_reject_missing_id" };
     }
-    if (message.startsWith("eta ") || message.startsWith("paid ")) {
-      return { ...(await handleAdminCommand(vendor, message)), ruleMatched: "admin_eta_or_paid" };
+    if (message.startsWith("eta ") || message.startsWith("paid ") || message.startsWith("not_paid ") || message.startsWith("ontheway ") || message.startsWith("delivered ")) {
+      const adminReply = await handleAdminCommand(vendor, message);
+      if (adminReply) return { ...adminReply, ruleMatched: "admin_command" };
+      return null;
     }
     if (["payment confirmed", "confirm payment", "paid confirmed", "paid"].includes(normalized)) {
       return { text: "Please provide the order ID to confirm payment, e.g. paid 1234", ruleMatched: "admin_paid_missing_id" };
@@ -114,7 +127,19 @@ async function tryDeterministicMatch(
       const [latestOrder] = await db.select().from(ordersTable).where(and(eq(ordersTable.vendorId, vendor.id), eq(ordersTable.customerPhone, customerPhone), eq(ordersTable.status, "confirmed"))).orderBy(desc(ordersTable.createdAt)).limit(1);
       if (latestOrder) {
         if (vendor.adminNumber && vendor.phoneNumberId) {
-          await queueOutboundMessage(vendor.phoneNumberId, vendor.adminNumber, `Customer ${customerPhone} claims they have paid for order #${latestOrder.shortId}.`);
+          await queueOutboundMessage(
+            vendor.phoneNumberId, 
+            vendor.adminNumber, 
+            `Customer ${customerPhone} claims they have paid for order #${latestOrder.shortId}.`,
+            undefined,
+            [
+              { id: `paid ${latestOrder.shortId}`, title: "Confirm Payment" },
+              { id: `not_paid ${latestOrder.shortId}`, title: "Not Received" }
+            ],
+            undefined,
+            undefined,
+            incomingMessageId
+          );
         }
         return { text: "Thanks! We've notified the vendor. They will confirm your payment shortly.", ruleMatched: "customer_payment_claim" };
       }
@@ -150,7 +175,7 @@ async function tryDeterministicMatch(
       else if (order.status === "on_the_way") response = `Your order #${order.shortId} is on the way! ${order.eta ? "ETA: " + order.eta : ""}`;
       
       if ((order.status === "paid" || order.status === "confirmed") && !order.eta && vendor.adminNumber && vendor.phoneNumberId) {
-         await queueOutboundMessage(vendor.phoneNumberId, vendor.adminNumber, `Customer ${customerPhone} is asking for an ETA for order #${order.shortId}. Reply with "eta ${order.shortId} 15 mins"`);
+         await queueOutboundMessage(vendor.phoneNumberId, vendor.adminNumber, `Customer ${customerPhone} is asking for an ETA for order #${order.shortId}. Reply with "eta ${order.shortId} 15 mins"`, undefined, undefined, undefined, undefined, incomingMessageId);
       }
       
       return { text: response, ruleMatched: "customer_order_tracking" };
@@ -181,15 +206,16 @@ export class ConversationManager {
     customerPhone: string,
     message: string,
     customerName?: string,
-    receivedAt?: number
+    receivedAt?: number,
+    incomingMessageId?: string
   ): Promise<{ text: string | null; buttons?: any[]; list?: any }> {
     try {
       const isAdmin = await isAdminSender(vendor, customerPhone);
       
-      const deterministicMatch = await tryDeterministicMatch(vendor, customerPhone, message, isAdmin);
+      const deterministicMatch = await tryDeterministicMatch(vendor, customerPhone, message, isAdmin, incomingMessageId);
       
       const conversation = await findOrCreateConversation(vendor, customerPhone, customerName || "Customer");
-      await recordMessage(conversation.id, "in", isAdmin ? "admin" : "customer", message);
+      await recordMessage(conversation.id, "in", isAdmin ? "vendor" : "customer", message);
       
       if (deterministicMatch) {
         logger.info({ phone: customerPhone, ruleMatched: deterministicMatch.ruleMatched, path: "deterministic" }, "Handled deterministically");
@@ -201,7 +227,8 @@ export class ConversationManager {
             undefined, 
             deterministicMatch.buttons, 
             deterministicMatch.list,
-            { receivedAt: receivedAt || Date.now(), llmDuration: 0, dbDuration: 0 }
+            { receivedAt: receivedAt || Date.now(), llmDuration: 0, dbDuration: 0 },
+            incomingMessageId
           );
           await recordMessage(conversation.id, "out", "bot", deterministicMatch.text);
         }
@@ -253,7 +280,8 @@ export class ConversationManager {
            undefined, 
            finalButtons, 
            finalList,
-           { receivedAt: receivedAt || Date.now(), llmDuration, dbDuration }
+           { receivedAt: receivedAt || Date.now(), llmDuration, dbDuration },
+           incomingMessageId
          );
          await recordMessage(conversation.id, "out", "bot", response.assistant_response);
       }
@@ -267,7 +295,12 @@ export class ConversationManager {
         await queueOutboundMessage(
           vendor.phoneNumberId, 
           customerPhone, 
-          "I'm sorry, I'm having trouble processing your request right now. Please try again in a moment."
+          "I'm sorry, I'm having trouble processing your request right now. Please try again in a moment.",
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          incomingMessageId
         );
       }
       return { text: "Error processing request." };

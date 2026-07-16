@@ -5,6 +5,8 @@ import { db, withVendorContext } from "@workspace/db";
 import { vendorsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "./logger";
+import crypto from "crypto";
+import { checkIdempotencyKey, recordIdempotencyKey } from "./idempotency";
 
 const INCOMING_CONCURRENCY = 5;    // Process up to 5 incoming messages concurrently
 const OUTBOUND_CONCURRENCY = 10;   // Send up to 10 messages concurrently
@@ -45,7 +47,8 @@ export async function setupQueueWorkers(): Promise<void> {
         data.fromPhone,
         data.body,
         data.fromName,
-        data.timestamp
+        data.timestamp,
+        data.incomingMessageId
       ));
 
       logger.debug({ jobId: job.id, phone: data.fromPhone }, "Incoming message processed successfully");
@@ -67,6 +70,21 @@ export async function setupQueueWorkers(): Promise<void> {
     try {
       logger.debug({ jobId: job.id, to: data.to }, "Sending outbound message");
       
+      let dedupeKey: string | undefined;
+      if (data.incomingMessageId) {
+        // Create a hash of the message content to uniquely identify this specific reply
+        // This prevents stalled/retried incoming jobs from sending duplicate identical replies
+        const contentStr = data.text + (data.buttons ? JSON.stringify(data.buttons) : '') + (data.list ? JSON.stringify(data.list) : '');
+        const contentHash = crypto.createHash('md5').update(contentStr).digest('hex');
+        dedupeKey = `outbound:${data.incomingMessageId}:${data.to}:${contentHash}`;
+        
+        const existing = await checkIdempotencyKey(dedupeKey);
+        if (existing) {
+          logger.warn({ jobId: job.id, to: data.to, dedupeKey }, "Duplicate outbound message skipped (stalled job protection)");
+          return; // Message already sent successfully, skip
+        }
+      }
+
       const sendStart = Date.now();
       const result = await sendWhatsAppMessage({
         phoneNumberId: data.phoneNumberId,
@@ -97,6 +115,11 @@ export async function setupQueueWorkers(): Promise<void> {
           "Message send failed",
         );
         throw new Error(`Send failed: ${result.reason ?? "not delivered"}`);
+      }
+
+      // Record successful delivery to prevent duplicate sends if the queue retries
+      if (dedupeKey) {
+        await recordIdempotencyKey(dedupeKey, result.messageId || "sent", "message");
       }
 
       logger.debug({ jobId: job.id, to: data.to, messageId: result.messageId }, "Message sent successfully");

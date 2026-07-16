@@ -59,8 +59,7 @@ export class LLMRouter {
         }
         
         if (attempts <= maxRetries) {
-          // Exponential backoff: 1s, 2s, 4s...
-          const backoff = Math.pow(2, attempts - 1) * 1000;
+          const backoff = 1000;
           logger.warn({ attempt: attempts, backoff, provider: provider.name }, `[LLMRouter] Transient error, retrying...`);
           await new Promise(resolve => setTimeout(resolve, backoff));
         }
@@ -92,7 +91,7 @@ export class LLMRouter {
     
     try {
       logger.info({ provider: activeProvider.name, ...metadata }, `[LLMRouter] Routing request...`);
-      return await this.executeWithRetries(activeProvider, systemPrompt, userMessage, 2); // default max 2 retries per provider
+      return await this.executeWithRetries(activeProvider, systemPrompt, userMessage, 1);
     } catch (primaryError) {
       logger.error({ error: primaryError, provider: activeProvider.name }, `[LLMRouter] Active provider failed completely.`);
       
@@ -100,7 +99,7 @@ export class LLMRouter {
       if (activeProvider === this.primary && this.fallback) {
         logger.warn({ fallback: this.fallback.name }, `[LLMRouter] Initiating failover...`);
         try {
-          return await this.executeWithRetries(this.fallback, systemPrompt, userMessage, 2);
+          return await this.executeWithRetries(this.fallback, systemPrompt, userMessage, 1);
         } catch (fallbackError) {
           logger.error({ error: fallbackError, provider: this.fallback.name }, `[LLMRouter] Fallback provider also failed.`);
           throw fallbackError; // Both failed

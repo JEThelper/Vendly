@@ -26,6 +26,7 @@ export interface IncomingMessageJob {
   body: string;
   timestamp: number;
   attempt: number;
+  incomingMessageId?: string;
 }
 
 
@@ -43,9 +44,9 @@ export const incomingQueue = new Queue("incoming-messages", REDIS_URL, {
   redis: redisOptions,
   settings: {
     maxStalledCount: 3,        // Max times a job can be stalled before failed
-    stalledInterval: 30000,    // Check for stalled jobs every 30 seconds
-    lockRenewTime: 15000,      // Renew lock every 15 seconds
-    lockDuration: 60000,       // Lock expires after 60 seconds
+    stalledInterval: 120000,   // Check for stalled jobs every 120 seconds
+    lockRenewTime: 60000,      // Renew lock every 60 seconds
+    lockDuration: 180000,      // Lock expires after 180 seconds
     retryProcessDelay: 1000,   // Delay between processing retries
   },
   defaultJobOptions: {
@@ -152,6 +153,7 @@ export async function queueIncomingMessage(
   fromName: string,
   body: string,
   receivedAt?: number,
+  incomingMessageId?: string,
 ): Promise<void> {
   const jobPromise = incomingQueue.add(
     {
@@ -161,6 +163,7 @@ export async function queueIncomingMessage(
       body,
       timestamp: receivedAt ?? Date.now(),
       attempt: 1,
+      incomingMessageId,
     } as IncomingMessageJob,
     {
       priority: 5,  // Normal priority
@@ -182,6 +185,7 @@ export interface OutboundMessageJob {
   timestamp: number;
   attempt: number;
   idempotencyKey?: string;
+  incomingMessageId?: string;
   buttons?: Array<{ id: string; title: string }>;
   list?: {
     buttonText: string;
@@ -212,6 +216,7 @@ export async function queueOutboundMessage(
     }>;
   },
   metrics?: { receivedAt: number; llmDuration: number; dbDuration: number },
+  incomingMessageId?: string,
 ): Promise<void> {
   logger.info({ phoneNumberId, to, metrics }, "Enqueueing outbound message with vendor phoneNumberId");
   await outboundQueue.add(
@@ -222,6 +227,7 @@ export async function queueOutboundMessage(
       timestamp: Date.now(),
       attempt: 1,
       idempotencyKey,
+      incomingMessageId,
       buttons,
       list,
       metrics,

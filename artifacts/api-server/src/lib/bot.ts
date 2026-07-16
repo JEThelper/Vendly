@@ -274,8 +274,8 @@ async function findOrderByShortId(vendorId: string, shortId: string): Promise<Or
     .where(
       and(
         eq(ordersTable.vendorId, vendorId),
-        sql`${ordersTable.id} LIKE ${shortId + "%"}`,
-      ),
+        eq(ordersTable.shortId, shortId)
+      )
     )
     .limit(1);
   return order ?? null;
@@ -1240,7 +1240,7 @@ export async function handleIncomingMessage(args: {
     }
 
     const reply = await handleAdminCommand(vendor, body);
-    if (reply.text && vendor.phoneNumberId) {
+    if (reply && reply.text && vendor.phoneNumberId) {
       // Queue the message instead of sending immediately
       await queueOutboundMessage(
         vendor.phoneNumberId,
@@ -1253,7 +1253,7 @@ export async function handleIncomingMessage(args: {
     }
     return {
       conversation: null,
-      botReply: reply.text,
+      botReply: reply?.text || null,
       adminNotification: null,
       isAdmin: true,
     };
@@ -1861,16 +1861,11 @@ type AdminReply = {
 
 export async function handleAdminCommand(
   vendor: VendorRow,
-  raw: string,
-): Promise<AdminReply> {
-  const body = raw.trim();
+  body: string,
+): Promise<AdminReply | null> {
   const lower = body.toLowerCase();
 
-  const aiIntent = await aiExtractAdminIntent(body);
-  if (aiIntent && aiIntent.intent !== "unknown") {
-    const aiReply = await handleAdminIntent(vendor, aiIntent);
-    if (aiReply) return aiReply;
-  }
+  // AI intent extraction is moved exclusively to the bottom as a fallback.
 
   // /help
   if (lower === "/help" || lower === "help" || lower === "?") {
@@ -2489,7 +2484,7 @@ async function handleAdminConfirmOrder(
     .set({ status: "confirmed" })
     .where(eq(ordersTable.id, order.id));
 
-  // Step 1: Send explicit order confirmation message
+  // Step 2: Send payment instructions
   await db.update(ordersTable).set({ status: "awaiting_payment" }).where(eq(ordersTable.id, order.id));
   await notifyCustomer(
     vendor,
@@ -2498,8 +2493,16 @@ async function handleAdminConfirmOrder(
     [{ id: "paid", title: "I Have Paid" }, { id: "cancel", title: "Cancel Order" }]
   );
 
+  if (vendor.adminNumber && vendor.phoneNumberId) {
+    await queueOutboundMessage(vendor.phoneNumberId, vendor.adminNumber, `Set an ETA for #${order.shortId}:`, undefined, [
+      { id: `eta ${order.shortId} 15 mins`, title: "ETA 15m" },
+      { id: `eta ${order.shortId} 30 mins`, title: "ETA 30m" },
+      { id: `eta ${order.shortId} 1 hour`, title: "ETA 1h" },
+    ]);
+  }
+
   return {
-    text: `Confirmed #${order.shortId} for ${order.customerName}. Confirmation + payment instructions sent to the customer.`,
+    text: `Confirmed #${order.shortId} for ${order.customerName}. Confirmation + payment instructions sent to the customer.\n\nReply 'eta ${order.shortId} <custom time>' for a custom ETA.`,
   };
 }
 

@@ -169,7 +169,8 @@ router.post("/webhook/messages", async (req, res) => {
                   msg.from,
                   profileName,
                   bodyText,
-                  receivedAt
+                  receivedAt,
+                  msg.id
                 );
                 logger.info({ vendorId: vendor.id, phone: msg.from }, "Successfully queued incoming message");
                 
