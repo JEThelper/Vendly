@@ -150,7 +150,7 @@ export async function buildMenuMessage(vendor: VendorRow): Promise<{ text: strin
   );
 
   let list: NonNullable<BotReply["list"]> | undefined = undefined;
-  if (items.length > 0 && items.length <= 24) {
+  if (items.length > 0 && items.length <= 10) {
     // Construct WhatsApp interactive list
     const sections: Array<{ title: string; rows: Array<{ id: string; title: string; description: string }> }> = [];
     let n = 1;
