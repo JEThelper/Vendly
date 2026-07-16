@@ -15,7 +15,7 @@ import {
   broadcastsTable,
   vendorAdminsTable,
 } from "@workspace/db";
-import { and, eq, sql, desc, gte } from "drizzle-orm";
+import { and, eq, sql, desc, gte, inArray } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./whatsapp";
 import { logger } from "./logger";
 import { hasFeature } from "./plans";
@@ -1243,6 +1243,75 @@ type BotReply = {
   adminAlert?: string | null;
 };
 
+export async function getFrequentOrder(vendorId: string, customerPhone: string): Promise<OrderItem[] | null> {
+  const pastOrders = await db.select()
+    .from(ordersTable)
+    .where(
+      and(
+        eq(ordersTable.vendorId, vendorId),
+        eq(ordersTable.customerPhone, customerPhone),
+        inArray(ordersTable.status, ["confirmed", "paid"])
+      )
+    )
+    .orderBy(desc(ordersTable.createdAt))
+    .limit(10);
+
+  if (pastOrders.length < 2) {
+    return null;
+  }
+
+  const comboCounts: Record<string, { count: number; items: OrderItem[] }> = {};
+  for (const order of pastOrders) {
+    if (!order.items || !Array.isArray(order.items)) continue;
+    const items = order.items as OrderItem[];
+    const sortedItems = [...items].sort((a, b) => a.name.localeCompare(b.name));
+    const sig = sortedItems.map(i => `${i.name}:${i.quantity}`).join("|");
+    if (!comboCounts[sig]) {
+      comboCounts[sig] = { count: 0, items: sortedItems };
+    }
+    comboCounts[sig].count++;
+  }
+
+  let maxCount = 0;
+  let bestCombo: OrderItem[] | null = null;
+  for (const sig in comboCounts) {
+    if (comboCounts[sig].count > maxCount) {
+      maxCount = comboCounts[sig].count;
+      bestCombo = comboCounts[sig].items;
+    }
+  }
+
+  if (maxCount >= 2 && bestCombo) {
+    return bestCombo;
+  }
+
+  if (pastOrders[0].items && Array.isArray(pastOrders[0].items)) {
+    return pastOrders[0].items as OrderItem[];
+  }
+  return null;
+}
+
+async function tryProactiveUsual(vendor: VendorRow, conversation: ConversationRow, fallbackText: string | null = null): Promise<BotReply | null> {
+  if (!hasFeature(vendor, "customer_memory")) return null;
+  const usualOrder = await getFrequentOrder(vendor.id, conversation.customerPhone ?? "");
+  if (!usualOrder) return null;
+  const orderString = usualOrder.map(item => `${item.quantity} ${item.name}`).join(", ");
+  const pendingResponse = await buildPendingOrderState(vendor, conversation, orderString);
+  if (pendingResponse.text && pendingResponse.text.includes("Order summary")) {
+    const itemsList = usualOrder.map(item => `${item.quantity}× ${item.name}`).join(", ");
+    let text = `Want your usual — ${itemsList}? Reply YES, or tell me what you'd like.`;
+    if (fallbackText) {
+       text = `${fallbackText}\n\n💡 ${text}`;
+    }
+    return {
+      text,
+      handover: false,
+    };
+  }
+  await clearPendingOrder(vendor.id, conversation.customerPhone ?? "");
+  return null;
+}
+
 async function computeBotReply(
   vendor: VendorRow,
   conversation: ConversationRow,
@@ -1503,14 +1572,47 @@ async function computeBotReply(
     return { text: msg, handover: false };
   }
 
+  // ── "The usual" explicit detection ──
+  const usualTriggers = ["the usual", "same as last time", "same as before", "my usual", "usual please"];
+  if (startsWithAny(body, usualTriggers) || includesAny(body, usualTriggers)) {
+    const usualOrder = await getFrequentOrder(vendor.id, conversation.customerPhone ?? "");
+    if (!usualOrder) {
+      return {
+        text: `I don't have a usual order for you yet — what would you like today?`,
+        handover: false,
+      };
+    }
+    const orderString = usualOrder.map(item => `${item.quantity} ${item.name}`).join(", ");
+    const pendingResponse = await buildPendingOrderState(vendor, conversation, orderString);
+    if (pendingResponse.text && pendingResponse.text.includes("Order summary")) {
+      const itemsList = usualOrder.map(item => `${item.quantity}× ${item.name}`).join(", ");
+      return {
+        text: `Your usual: ${itemsList}\n\n${pendingResponse.text}`,
+        handover: false,
+      };
+    }
+    return pendingResponse; // Returns graceful fallback if items are unavailable or changed
+  }
+
   // ── Order detection (after cancel/status to prevent false matches) ──
   if (looksLikeOrder(body, activeItems, vendor.id)) {
-    return await buildPendingOrderState(vendor, conversation, body);
+    const pendingResponse = await buildPendingOrderState(vendor, conversation, body);
+    if (pendingResponse.text && pendingResponse.text.includes("I didn't catch your order")) {
+      // It was a generic order intent, try proactive usual
+      const proactive = await tryProactiveUsual(vendor, conversation);
+      if (proactive) return proactive;
+    }
+    return pendingResponse;
   }
 
   // Menu request
   if (startsWithAny(body, menuTriggers)) {
-    return { text: await buildMenuMessage(vendor), handover: false };
+    const menuText = await buildMenuMessage(vendor);
+    const proactive = await tryProactiveUsual(vendor, conversation, null);
+    if (proactive) {
+      return { text: `${proactive.text}\n\n${menuText}`, handover: false };
+    }
+    return { text: menuText, handover: false };
   }
 
   // Greeting / welcome
@@ -1518,6 +1620,9 @@ async function computeBotReply(
     const welcome =
       vendor.welcomeMessage ??
       `Hey there! 👋 Welcome to *${vendor.name}*. Reply *menu* to see what's available!`;
+    const proactive = await tryProactiveUsual(vendor, conversation, welcome);
+    if (proactive) return proactive;
+    
     return { text: welcome, handover: false };
   }
 

@@ -1,6 +1,9 @@
 import { Router, type IRouter } from "express";
-import { db } from "@workspace/db";
-import { vendorsTable } from "@workspace/db";
+import {
+  db,
+  vendorsTable,
+  withVendorContext,
+} from "@workspace/db";
 import { eq, or } from "drizzle-orm";
 import {
   WhatsappWebhookBody,
@@ -229,12 +232,12 @@ router.post("/webhook/whatsapp", async (req, res) => {
       .json({ ok: false, botReply: null, conversationId: null });
   }
 
-  const result = await handleIncomingMessage({
+  const result = await withVendorContext(vendor.id, () => handleIncomingMessage({
     vendor,
     fromPhone: body.data.from,
     fromName: body.data.profileName ?? body.data.from,
     body: body.data.body,
-  });
+  }));
 
   return res.json({
     ok: true,
@@ -261,20 +264,28 @@ router.post("/simulator/incoming", async (req, res) => {
 
   if (!vendor) return res.status(404).json({ error: "vendor_not_found" });
 
-  const result = await handleIncomingMessage({
-    vendor,
-    fromPhone: body.data.customerPhone,
-    fromName: body.data.customerName ?? body.data.customerPhone,
-    body: body.data.body,
-  });
+  try {
+    const result = await withVendorContext(vendor.id, () => handleIncomingMessage({
+      vendor,
+      fromPhone: body.data.customerPhone,
+      fromName: body.data.customerName ?? body.data.customerPhone,
+      body: body.data.body,
+    }));
 
-  return res.json({
-    ok: true,
-    botReply: result.botReply,
-    conversationId: result.conversation?.id ?? null,
-    isAdmin: result.isAdmin,
-    adminNotification: result.adminNotification,
-  });
+    return res.json({
+      ok: true,
+      botReply: result.botReply,
+      conversationId: result.conversation?.id ?? null,
+      isAdmin: result.isAdmin,
+      adminNotification: result.adminNotification,
+    });
+  } catch (err: any) {
+    req.log.error({ err }, "Simulator handling failed");
+    return res.status(500).json({ 
+      error: err.message, 
+      cause: err.cause?.message || String(err.cause) 
+    });
+  }
 });
 
 export default router;

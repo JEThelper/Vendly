@@ -19,7 +19,6 @@ export const pendingOrdersTable = pgTable(
       .references(() => vendorsTable.id, { onDelete: "cascade" }),
     customerPhone: text("customer_phone").notNull(),
     menuItemId: uuid("menu_item_id")
-      .notNull()
       .references(() => menuItemsTable.id, { onDelete: "cascade" }),
     itemName: text("item_name").notNull(),
     quantity: integer("quantity").notNull(),

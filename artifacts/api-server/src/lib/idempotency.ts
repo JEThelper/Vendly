@@ -52,7 +52,7 @@ export async function checkIdempotencyKey(
 ): Promise<{ id: string; createdAt: Date } | null> {
   try {
     const result = await db.execute(sql`
-      SELECT id, created_at 
+      SELECT resource_id AS id, created_at 
       FROM idempotency_keys 
       WHERE key = ${key} 
       LIMIT 1

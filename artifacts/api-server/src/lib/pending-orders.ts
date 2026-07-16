@@ -3,7 +3,7 @@ import { eq, and, lt } from "drizzle-orm";
 import { logger } from "./logger";
 
 // Sentinel UUID used to identify the clarification metadata row
-const CLARIFICATION_SENTINEL_ID = "00000000-0000-0000-0000-000000000000";
+// Note: MenuItemId is now nullable so we can store clarifications properly
 
 export type PendingResolvedItem = {
   menuItemId: string;
@@ -76,7 +76,7 @@ export async function setPendingOrder(
       rows.push({
         vendorId,
         customerPhone,
-        menuItemId: CLARIFICATION_SENTINEL_ID,
+        menuItemId: null,
         itemName: JSON.stringify(pendingClarification),
         quantity: 0,
         unitPrice: "0",
@@ -136,7 +136,7 @@ export async function getPendingOrder(
     let total = 0;
 
     for (const row of rows) {
-      if (row.menuItemId === CLARIFICATION_SENTINEL_ID) {
+      if (row.menuItemId === null) {
         try {
           pendingClarification = JSON.parse(row.itemName) as PendingClarification;
           total = Number(row.total);
@@ -158,8 +158,8 @@ export async function getPendingOrder(
     // If clarification row set total, use that (it holds the running total)
     // Otherwise sum from items
     const finalTotal = pendingClarification
-      ? rows.find(r => r.menuItemId === CLARIFICATION_SENTINEL_ID)
-        ? Number(rows.find(r => r.menuItemId === CLARIFICATION_SENTINEL_ID)!.total)
+      ? rows.find(r => r.menuItemId === null)
+        ? Number(rows.find(r => r.menuItemId === null)!.total)
         : total
       : total;
 

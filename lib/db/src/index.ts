@@ -1,5 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
+import { sql } from "drizzle-orm";
+import { AsyncLocalStorage } from "async_hooks";
 import * as schema from "./schema";
 
 const { Pool } = pg;
@@ -43,8 +45,30 @@ if (process.env.NODE_ENV === "production") {
   });
 }
 
-export const db = drizzle(pool, { schema });
+export const baseDb = drizzle(pool, { schema });
 
+const vendorContext = new AsyncLocalStorage<typeof baseDb>();
+
+export const db = new Proxy({} as typeof baseDb, {
+  get(target, prop) {
+    const tx = vendorContext.getStore();
+    return (tx || baseDb)[prop as keyof typeof baseDb];
+  }
+});
+
+/**
+ * Wraps a callback in a database transaction and sets the RLS vendor context
+ * so that queries executed inside the callback are isolated to this vendor.
+ */
+export async function withVendorContext<T>(vendorId: string, fn: () => Promise<T>): Promise<T> {
+  return baseDb.transaction(async (tx) => {
+    // Set the vendor context for this transaction only. 
+    // The `true` parameter makes the variable local to the current transaction.
+    await tx.execute(sql`SELECT set_config('app.current_vendor_id', ${vendorId}, true)`);
+    // Run the callback inside ALS so any nested `db` calls use this transaction
+    return vendorContext.run(tx as any, fn);
+  });
+}
 /**
  * Health check for database connectivity
  * Use this to verify the database is responsive

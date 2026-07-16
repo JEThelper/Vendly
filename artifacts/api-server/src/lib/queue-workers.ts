@@ -1,7 +1,7 @@
 import { incomingQueue, outboundQueue, broadcastQueue, IncomingMessageJob, OutboundMessageJob } from "./queue";
 import { handleIncomingMessage } from "./bot";
 import { sendWhatsAppMessage } from "./whatsapp";
-import { db } from "@workspace/db";
+import { db, withVendorContext } from "@workspace/db";
 import { vendorsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "./logger";
@@ -39,12 +39,12 @@ export async function setupQueueWorkers(): Promise<void> {
       }
 
       // Process the message
-      await handleIncomingMessage({
+      await withVendorContext(vendor.id, () => handleIncomingMessage({
         vendor,
         fromPhone: data.fromPhone,
         fromName: data.fromName,
         body: data.body,
-      });
+      }));
 
       logger.debug({ jobId: job.id, phone: data.fromPhone }, "Incoming message processed successfully");
     } catch (err) {

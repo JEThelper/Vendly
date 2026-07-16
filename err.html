@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Error</title>
+</head>
+<body>
+<pre>Error: Failed query: insert into &quot;messages&quot; (&quot;id&quot;, &quot;conversation_id&quot;, &quot;direction&quot;, &quot;sender&quot;, &quot;body&quot;, &quot;created_at&quot;) values (default, $1, $2, $3, $4, default)<br>params: 065c7145-a892-455d-bae4-3540b3de5440,out,bot,Sorry, I couldn&#39;t save your order yet. Please try again.<br> &nbsp; &nbsp;at NodePgPreparedQuery.queryWithCache (/workspaces/Vendly/node_modules/.pnpm/drizzle-orm@0.45.2_@types+pg@8.18.0_pg@8.20.0/node_modules/src/pg-core/session.ts:73:11)<br> &nbsp; &nbsp;at process.processTicksAndRejections (node:internal/process/task_queues:104:5)<br> &nbsp; &nbsp;at async recordMessage (/workspaces/Vendly/artifacts/api-server/src/lib/bot.ts:1095:3)<br> &nbsp; &nbsp;at async handleIncomingMessage (/workspaces/Vendly/artifacts/api-server/src/lib/bot.ts:1210:5)<br> &nbsp; &nbsp;at async _NodePgSession.transaction (/workspaces/Vendly/node_modules/.pnpm/drizzle-orm@0.45.2_@types+pg@8.18.0_pg@8.20.0/node_modules/src/node-postgres/session.ts:259:19)<br> &nbsp; &nbsp;at async &lt;anonymous&gt; (/workspaces/Vendly/artifacts/api-server/src/routes/webhook.ts:269:18)</pre>
+</body>
+</html>
