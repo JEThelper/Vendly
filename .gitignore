@@ -58,3 +58,11 @@ lib/db/.env
 lib/db/.env.local
 artifacts/control-panel/.env
 artifacts/control-panel/.env.local
+dump.rdb
+err.html
+fix-rls.js
+fix-rls.mjs
+test-rls.cjs
+apply-rls.cjs
+supabase/.temp/
+dump.rdb

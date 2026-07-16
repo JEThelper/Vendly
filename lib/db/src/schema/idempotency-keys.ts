@@ -11,7 +11,7 @@ export const idempotencyKeysTable = pgTable(
   "idempotency_keys",
   {
     key: text("key").notNull(),
-    resourceId: uuid("resource_id").notNull(),
+    resourceId: text("resource_id").notNull(),
     resourceType: text("resource_type").notNull(), // 'order' | 'message' | 'broadcast'
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

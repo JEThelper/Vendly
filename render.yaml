@@ -10,7 +10,7 @@ services:
       - key: PORT
         value: 3000
       - key: DATABASE_URL
-        value: postgresql://vendly_app.dwodcbhzolgvvuzybexx:VendlyAppSecure123!@aws-0-us-east-1.pooler.supabase.com:6543/postgres
+        sync: false
       - key: REDIS_URL
         fromService:
           type: redis

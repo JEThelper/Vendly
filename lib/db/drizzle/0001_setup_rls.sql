@@ -2,7 +2,7 @@
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'vendly_app') THEN
-    CREATE ROLE vendly_app WITH LOGIN PASSWORD 'VendlyAppSecure123!';
+    CREATE ROLE vendly_app WITH LOGIN PASSWORD 'REPLACE_ME';
   END IF;
 END
 $$;
@@ -29,8 +29,15 @@ ALTER TABLE vendor_admins ENABLE ROW LEVEL SECURITY;
 
 -- 4. Create Policies
 DROP POLICY IF EXISTS vendor_isolation ON vendors;
-CREATE POLICY vendor_isolation ON vendors TO vendly_app
-  USING (id = current_setting('app.current_vendor_id', true)::uuid);
+DROP POLICY IF EXISTS vendor_isolation_select ON vendors;
+DROP POLICY IF EXISTS vendor_isolation_insert ON vendors;
+DROP POLICY IF EXISTS vendor_isolation_update ON vendors;
+DROP POLICY IF EXISTS vendor_isolation_delete ON vendors;
+
+CREATE POLICY vendor_isolation_select ON vendors FOR SELECT TO vendly_app USING (true);
+CREATE POLICY vendor_isolation_insert ON vendors FOR INSERT TO vendly_app WITH CHECK (id = current_setting('app.current_vendor_id', true)::uuid);
+CREATE POLICY vendor_isolation_update ON vendors FOR UPDATE TO vendly_app USING (id = current_setting('app.current_vendor_id', true)::uuid);
+CREATE POLICY vendor_isolation_delete ON vendors FOR DELETE TO vendly_app USING (id = current_setting('app.current_vendor_id', true)::uuid);
 
 DROP POLICY IF EXISTS vendor_isolation ON customers;
 CREATE POLICY vendor_isolation ON customers TO vendly_app
