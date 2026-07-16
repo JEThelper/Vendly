@@ -456,13 +456,20 @@ async function buildPendingOrderState(
     };
   }
 
-  const parsed = parseOrderLine(body);
-  let requests = parsed;
-  if (requests.length === 0) {
+  let requests: ParsedItem[] = [];
+  
+  const isPureNumbers = /^[\\d,\\s x×*]+$/i.test(body.trim()) && /\\d/.test(body.trim());
+
+  if (isPureNumbers) {
+    requests = parseOrderLine(body);
+  } else {
     const mappedItems = activeItems.map(item => ({ name: item.name, price: item.price.toString() }));
     const aiItems = await aiExtractOrder(body, mappedItems);
     if (aiItems) {
       requests = aiItems.map((order) => ({ kind: "name", name: order.item, quantity: order.quantity }));
+    }
+    if (requests.length === 0) {
+      requests = parseOrderLine(body);
     }
   }
 
