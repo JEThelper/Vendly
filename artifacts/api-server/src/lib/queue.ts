@@ -152,7 +152,7 @@ export async function queueIncomingMessage(
   fromName: string,
   body: string,
 ): Promise<void> {
-  await incomingQueue.add(
+  const jobPromise = incomingQueue.add(
     {
       vendorId,
       fromPhone,
@@ -165,6 +165,13 @@ export async function queueIncomingMessage(
       priority: 5,  // Normal priority
     },
   );
+
+  // Add a 5-second timeout to catch Redis hanging
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("Timeout waiting for Redis queue.add")), 5000)
+  );
+
+  await Promise.race([jobPromise, timeoutPromise]);
 }
 
 /**

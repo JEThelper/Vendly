@@ -149,12 +149,14 @@ router.post("/webhook/messages", async (req, res) => {
               // PRODUCTION CHANGE: Queue the message instead of processing immediately
               // This prevents request pile-up during traffic spikes
               try {
+                logger.info({ vendorId: vendor.id, phone: msg.from }, "Attempting to queue incoming message");
                 await queueIncomingMessage(
                   vendor.id,
                   msg.from,
                   profileName,
                   msg.text.body,
                 );
+                logger.info({ vendorId: vendor.id, phone: msg.from }, "Successfully queued incoming message");
                 
                 // Record this message ID to prevent duplicate processing
                 if (msg.id) {
