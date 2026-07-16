@@ -70,6 +70,13 @@ router.post("/webhook/messages", async (req, res) => {
   // Always 200 immediately so Meta doesn't retry; do work in the background.
   res.sendStatus(200);
 
+  logger.info({ 
+    body: req.body, 
+    rawBodyLength: rawBody?.length,
+    hasAppSecret: !!appSecret,
+    isSignatureValid 
+  }, "Webhook received and signature verified");
+
   // Process webhook asynchronously (background job)
   // This allows us to return 200 to Meta immediately before processing completes
   (async () => {
