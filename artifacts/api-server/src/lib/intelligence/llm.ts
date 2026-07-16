@@ -2,8 +2,10 @@ import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import { LLMResponse } from "./types";
 import { logger } from "../logger";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+import Groq from "groq-sdk";
 
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+const groqClient = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
 
 const responseSchema = {
   type: SchemaType.OBJECT,
@@ -78,7 +80,35 @@ export async function processWithLLM(systemPrompt: string, userMessage: string):
     const jsonStr = result.response.text();
     return JSON.parse(jsonStr) as LLMResponse;
   } catch (error) {
-    logger.error({ error }, "LLM execution failed");
+    logger.error({ error }, "Gemini execution failed, attempting Groq fallback...");
+    
+    if (groqClient) {
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("Groq Timeout")), 10000);
+        });
+
+        const groqCall = groqClient.chat.completions.create({
+          model: "llama3-8b-8192",
+          messages: [
+            { 
+              role: "system", 
+              content: systemPrompt + "\n\nRespond strictly with JSON matching this schema: " + JSON.stringify(responseSchema) 
+            },
+            { role: "user", content: userMessage }
+          ],
+          response_format: { type: "json_object" }
+        });
+
+        const result = await Promise.race([groqCall, timeoutPromise]);
+        const jsonStr = result.choices[0]?.message?.content || "";
+        return JSON.parse(jsonStr) as LLMResponse;
+      } catch (groqError) {
+        logger.error({ error: groqError }, "Groq fallback execution failed");
+        return null;
+      }
+    }
+    
     return null;
   }
 }
