@@ -14,6 +14,11 @@ import { logger } from "./logger";
 
 const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 
+const redisOptions = {
+  family: 4, // Force IPv4 to prevent hanging on Render internal DNS
+  ...(REDIS_URL.startsWith("rediss://") ? { tls: { rejectUnauthorized: false } } : {}),
+};
+
 export interface IncomingMessageJob {
   vendorId: string;
   fromPhone: string;
@@ -43,6 +48,7 @@ export interface BroadcastMessageJob {
 
 // Incoming webhook message processing queue
 export const incomingQueue = new Queue("incoming-messages", REDIS_URL, {
+  redis: redisOptions,
   settings: {
     maxStalledCount: 3,        // Max times a job can be stalled before failed
     stalledInterval: 30000,    // Check for stalled jobs every 30 seconds
@@ -65,6 +71,7 @@ export const incomingQueue = new Queue("incoming-messages", REDIS_URL, {
 
 // Outbound WhatsApp message queue (with higher retry count)
 export const outboundQueue = new Queue("outbound-messages", REDIS_URL, {
+  redis: redisOptions,
   settings: {
     maxStalledCount: 5,
     stalledInterval: 30000,
@@ -87,6 +94,7 @@ export const outboundQueue = new Queue("outbound-messages", REDIS_URL, {
 
 // Broadcast message queue (separate to avoid blocking priority messages)
 export const broadcastQueue = new Queue("broadcast-messages", REDIS_URL, {
+  redis: redisOptions,
   settings: {
     maxStalledCount: 2,
     stalledInterval: 60000,

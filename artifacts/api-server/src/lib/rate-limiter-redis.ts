@@ -6,7 +6,10 @@ let redisClient: ReturnType<typeof createClient> | null = null;
 
 async function getRedisClient() {
   if (!redisClient) {
-    redisClient = createClient({ url: process.env.REDIS_URL });
+    redisClient = createClient({ 
+      url: process.env.REDIS_URL,
+      socket: { family: 4 }
+    });
     redisClient.on("error", (err) => logger.error({ err }, "Redis client error"));
     await redisClient.connect();
   }
