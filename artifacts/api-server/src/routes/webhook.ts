@@ -95,7 +95,7 @@ router.post("/webhook/messages", async (req, res) => {
               id?: string;
               type?: string;
               text?: { body?: string };
-              interactive?: { type?: string; button_reply?: { id?: string; title?: string } };
+              interactive?: { type?: string; button_reply?: { id?: string; title?: string }; list_reply?: { id?: string; title?: string; description?: string } };
             }>;
           };
           const phoneNumberId = v.metadata?.phone_number_id;
@@ -117,12 +117,16 @@ router.post("/webhook/messages", async (req, res) => {
           }
 
           for (const msg of messages) {
-            // Extract text body from either text message or interactive button reply
+            // Extract text body from either text message or interactive button/list reply
             let bodyText = "";
             if (msg.type === "text" && msg.text?.body) {
               bodyText = msg.text.body;
-            } else if (msg.type === "interactive" && msg.interactive?.type === "button_reply" && msg.interactive.button_reply?.id) {
-              bodyText = msg.interactive.button_reply.id;
+            } else if (msg.type === "interactive") {
+              if (msg.interactive?.type === "button_reply" && msg.interactive.button_reply?.id) {
+                bodyText = msg.interactive.button_reply.id;
+              } else if (msg.interactive?.type === "list_reply" && msg.interactive.list_reply?.id) {
+                bodyText = msg.interactive.list_reply.id;
+              }
             }
 
             // Handle text and interactive messages

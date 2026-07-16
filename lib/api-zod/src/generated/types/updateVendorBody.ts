@@ -21,4 +21,6 @@ export interface UpdateVendorBody {
   bankAccountHolder?: string;
   currency?: string;
   welcomeMessage?: string;
+  requiresDeliveryAddress?: boolean;
+  deliveryLocations?: string[];
 }

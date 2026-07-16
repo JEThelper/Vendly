@@ -19,7 +19,7 @@ import { and, eq, sql, desc, gte, inArray } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./whatsapp";
 import { logger } from "./logger";
 import { hasFeature } from "./plans";
-import { aiExtractOrder, aiExtractAdminIntent, generateChatResponse, type ExtractedAdminIntent } from "./ai-extractor";
+import { aiExtractOrder, aiExtractAdminIntent, generateChatResponse, detectCustomerIntent, type ExtractedAdminIntent } from "./ai-extractor";
 import {
   setPendingOrder,
   getPendingOrder,
@@ -106,11 +106,11 @@ async function listActivePromotions(vendor: VendorRow) {
     .limit(3);
 }
 
-async function buildMenuMessage(vendor: VendorRow): Promise<string> {
+async function buildMenuMessage(vendor: VendorRow): Promise<{ text: string; list?: NonNullable<BotReply["list"]> }> {
   const items = await listActiveMenuItems(vendor);
 
   if (items.length === 0) {
-    return `Our menu is being updated. Please check back soon.`;
+    return { text: `Our menu is being updated. Please check back soon.` };
   }
 
   const promos = await listActivePromotions(vendor);
@@ -148,7 +148,38 @@ async function buildMenuMessage(vendor: VendorRow): Promise<string> {
   lines.push(
     `For multiple items: *1, 3x2, 5* (item 1, two of item 3, item 5).`,
   );
-  return lines.join("\n");
+
+  let list: NonNullable<BotReply["list"]> | undefined = undefined;
+  if (items.length > 0 && items.length <= 24) {
+    // Construct WhatsApp interactive list
+    const sections: Array<{ title: string; rows: Array<{ id: string; title: string; description: string }> }> = [];
+    let n = 1;
+    for (const item of items) {
+      const cat = (item.category ?? "Menu").slice(0, 24);
+      let sec = sections.find(s => s.title === cat);
+      if (!sec) {
+        if (sections.length >= 10) {
+          sec = sections[sections.length - 1]; // Fallback to last section
+        } else {
+          sec = { title: cat, rows: [] };
+          sections.push(sec);
+        }
+      }
+      sec.rows.push({
+        id: `order ${item.name}`,
+        title: item.name.slice(0, 24),
+        description: formatMoney(Number(item.price), vendor.currency),
+      });
+      n++;
+    }
+
+    list = {
+      buttonText: "Browse Menu",
+      sections,
+    };
+  }
+
+  return { text: lines.join("\n"), list };
 }
 
 // Parse what the customer wants. Supports:
@@ -284,15 +315,17 @@ async function notifyCustomer(
   vendor: VendorRow,
   customerPhone: string,
   text: string,
+  buttons?: Array<{ id: string; title: string }>,
 ): Promise<void> {
   const conversation = await findOrCreateConversation(vendor, customerPhone, "Customer");
   await recordMessage(conversation.id, "out", "bot", text);
-  // Use queue for reliable delivery with retries
   if (vendor.phoneNumberId) {
     await queueOutboundMessage(
       vendor.phoneNumberId,
       customerPhone,
       text,
+      undefined,
+      buttons
     );
   }
 }
@@ -697,6 +730,60 @@ function findBestCandidateMatch(
   return options.find((option) => option.itemName.toLowerCase() === normalized) ?? null;
 }
 
+function orderCreatedResponse(vendor: VendorRow, conversation: ConversationRow, pendingOrder: PendingOrder, order: OrderRow | null, deliveryType: string, location: string | null = null): BotReply {
+  if (!order) {
+    return {
+      text: `Sorry, I encountered an error confirming your order. Please try again.`,
+      handover: false,
+    };
+  }
+
+  const orderItems = pendingOrder.resolvedItems;
+  const lines: string[] = [`*Order sent! ✓*`, ``];
+  for (const item of orderItems) {
+    lines.push(
+      `- ${item.quantity}× ${item.itemName} — ${formatMoney(
+        Number(item.unitPrice) * item.quantity,
+        vendor.currency,
+      )}`,
+    );
+  }
+  lines.push(``, `Total: *${formatMoney(pendingOrder.total, vendor.currency)}*`);
+  lines.push(``, `Type: ${deliveryType === "delivery" ? "Delivery" : "Pickup"}`);
+  if (location) {
+    lines.push(`Address: ${location}`);
+  }
+  lines.push(``, `Order #${order.shortId} sent to vendor. They'll confirm shortly.`);
+
+  const adminLines: string[] = [
+    `*New order from ${conversation.customerName}* (${conversation.customerPhone})`,
+    ``,
+  ];
+  for (const item of orderItems) {
+    adminLines.push(
+      `- ${item.quantity}× ${item.itemName} — ${formatMoney(
+        Number(item.unitPrice) * item.quantity,
+        vendor.currency,
+      )}`,
+    );
+  }
+  adminLines.push(``, `Total: ${formatMoney(pendingOrder.total, vendor.currency)}`);
+  adminLines.push(`Type: ${deliveryType === "delivery" ? "Delivery" : "Pickup"}`);
+  if (location) {
+    adminLines.push(`Address: ${location}`);
+  }
+
+  return {
+    text: lines.join("\n"),
+    handover: false,
+    adminAlert: adminLines.join("\n"),
+    adminAlertButtons: [
+      { id: `confirm ${order.shortId}`, title: "Confirm Order" },
+      { id: `reject ${order.shortId}`, title: "Reject Order" }
+    ],
+  };
+}
+
 async function resolvePendingClarification(
   vendor: VendorRow,
   conversation: ConversationRow,
@@ -711,51 +798,28 @@ async function resolvePendingClarification(
   const state = pendingOrder.pendingClarification;
   const trimmed = body.trim();
 
+  // Handle delivery options (type)
+  if (state.originalText === "awaiting_delivery_type") {
+    if (trimmed.toLowerCase() === "pickup") {
+      // Create order as pickup
+      const order = await createOrderWithLock(vendor.id, conversation.customerPhone ?? "unknown", conversation.customerName ?? "Anonymous", pendingOrder.resolvedItems.map(pendingResolvedItemToOrderItem), vendor, "pickup", null);
+      await clearPendingOrder(vendor.id, conversation.customerPhone ?? "unknown");
+      return orderCreatedResponse(vendor, conversation, pendingOrder, order, "pickup");
+    } else if (trimmed.toLowerCase() === "delivery") {
+      // Ask for location
+      const locations = vendor.deliveryLocations && vendor.deliveryLocations.length > 0 ? vendor.deliveryLocations.join(", ") : "your address";
+      await setPendingOrder(vendor.id, conversation.customerPhone ?? "unknown", pendingOrder.resolvedItems, { originalText: "awaiting_delivery_location", quantity: 1, candidates: [], remaining: [] }, pendingOrder.total);
+      return { text: `We deliver to: ${locations}.\nWhere are you located? Please provide your delivery address.`, handover: false };
+    } else {
+      return { text: `Please reply with either *Delivery* or *Pickup*.`, handover: false };
+    }
+  }
+
   // Handle delivery address collection
-  if (state.originalText === "awaiting_delivery_address") {
-    // Store the address in the pending order by creating a new order with the address
-    // For now, we'll store it in a special way that the order creation can access
-    
-    // Recreate the pending order with the address, then create the actual order
-    const order = await createOrderWithLock(
-      vendor.id,
-      conversation.customerPhone ?? "unknown",
-      conversation.customerName ?? "Anonymous",
-      pendingOrder.resolvedItems.map(pendingResolvedItemToOrderItem),
-      vendor,
-    );
-
-    if (order) {
-      // Update order notes with the address
-      await db.update(ordersTable).set({
-        notes: trimmed,
-      }).where(eq(ordersTable.id, order.id));
-    }
-
-    await clearPendingOrder(vendor.id, conversation.customerPhone);
-
-    if (!order) {
-      return {
-        text: `Sorry, I encountered an error confirming your order. Please try again.`,
-        handover: false,
-      };
-    }
-
-    const orderItems = pendingOrder.resolvedItems.map(pendingResolvedItemToOrderItem);
-    const lines: string[] = [`*Order confirmed! ✓*`, ``];
-    for (const item of orderItems) {
-      lines.push(
-        `- ${item.quantity}× ${item.item.name} — ${formatMoney(
-          Number(item.item.price) * item.quantity,
-          vendor.currency,
-        )}`,
-      );
-    }
-    lines.push(``, `Total: *${formatMoney(pendingOrder.total, vendor.currency)}*`);
-    lines.push(``, `Address: ${trimmed}`);
-    lines.push(``, `Order #${order.shortId} sent to vendor. They'll confirm shortly.`);
-
-    return { text: lines.join("\n"), handover: false };
+  if (state.originalText === "awaiting_delivery_location") {
+    const order = await createOrderWithLock(vendor.id, conversation.customerPhone ?? "unknown", conversation.customerName ?? "Anonymous", pendingOrder.resolvedItems.map(pendingResolvedItemToOrderItem), vendor, "delivery", trimmed);
+    await clearPendingOrder(vendor.id, conversation.customerPhone ?? "unknown");
+    return orderCreatedResponse(vendor, conversation, pendingOrder, order, "delivery", trimmed);
   }
 
   if (state.candidates.length > 0) {
@@ -1026,6 +1090,8 @@ async function createOrderWithLock(
   customerName: string,
   orderItems: Array<{ item: MenuItemRow; quantity: number }>,
   vendor: VendorRow,
+  deliveryType: string | null = null,
+  deliveryLocation: string | null = null,
 ): Promise<OrderRow | null> {
   try {
     // Generate idempotency key from stable inputs
@@ -1055,6 +1121,8 @@ async function createOrderWithLock(
         customerName,
         status: "pending",
         paymentStatus: "pending",
+        deliveryType,
+        deliveryLocation,
         total: orderItems
           .reduce((sum, oi) => sum + Number(oi.item.price) * oi.quantity, 0)
           .toFixed(2),
@@ -1174,6 +1242,9 @@ export async function handleIncomingMessage(args: {
         vendor.phoneNumberId,
         fromPhone,
         reply.text,
+        undefined,
+        reply.buttons,
+        reply.list,
       );
     }
     return {
@@ -1229,6 +1300,9 @@ export async function handleIncomingMessage(args: {
       vendor.phoneNumberId,
       fromPhone,
       reply.text,
+      undefined,
+      undefined,
+      reply.list,
     );
     logger.info("After queueOutboundMessage");
   }
@@ -1277,6 +1351,13 @@ type BotReply = {
   handover: boolean;
   adminAlert?: string | null;
   adminAlertButtons?: Array<{ id: string; title: string }>;
+  list?: {
+    buttonText: string;
+    sections: Array<{
+      title: string;
+      rows: Array<{ id: string; title: string; description?: string }>;
+    }>;
+  };
 };
 
 export async function getFrequentOrder(vendorId: string, customerPhone: string): Promise<OrderItem[] | null> {
@@ -1447,83 +1528,23 @@ async function computeBotReply(
 
   if (pendingOrder) {
     if (isAffirmative(body)) {
-      // Check if vendor requires delivery address and we don't have one yet
-      if (vendor.requiresDeliveryAddress) {
-        const hasAddress = (pendingOrder as any).deliveryAddress;
-        if (!hasAddress) {
-          // Store the current pending order with a clarification state to ask for address
-          await setPendingOrder(
-            vendor.id,
-            conversation.customerPhone,
-            pendingOrder.resolvedItems,
-            {
-              originalText: "awaiting_delivery_address",
-              quantity: 1,
-              candidates: [],
-              remaining: [],
-            },
-            pendingOrder.total,
-          );
-
-          return {
-            text: `Please provide your delivery address so the vendor knows where to send your order.`,
-            handover: false,
-          };
-        }
-      }
-
-      const order = await createOrderWithLock(
+      // Prompt for delivery or pickup
+      await setPendingOrder(
         vendor.id,
-        conversation.customerPhone ?? "unknown",
-        conversation.customerName ?? "Anonymous",
-        pendingOrder.resolvedItems.map(pendingResolvedItemToOrderItem),
-        vendor,
+        conversation.customerPhone,
+        pendingOrder.resolvedItems,
+        {
+          originalText: "awaiting_delivery_type",
+          quantity: 1,
+          candidates: [],
+          remaining: [],
+        },
+        pendingOrder.total,
       );
 
-      await clearPendingOrder(vendor.id, conversation.customerPhone);
-
-      if (!order) {
-        return {
-          text: `Sorry, I encountered an error confirming your order. Please try again.`,
-          handover: false,
-        };
-      }
-
-      const orderItems = pendingOrder.resolvedItems.map(pendingResolvedItemToOrderItem);
-      const lines: string[] = [`*Order confirmed! ✓*`, ``];
-      for (const item of orderItems) {
-        lines.push(
-          `- ${item.quantity}× ${item.item.name} — ${formatMoney(
-            Number(item.item.price) * item.quantity,
-            vendor.currency,
-          )}`,
-        );
-      }
-      lines.push(``, `Total: *${formatMoney(pendingOrder.total, vendor.currency)}*`);
-      lines.push(``, `Order #${order.shortId} sent to vendor. They'll confirm shortly.`);
-
-      const adminLines: string[] = [
-        `*New order from ${conversation.customerName}* (${conversation.customerPhone})`,
-        ``,
-      ];
-      for (const item of orderItems) {
-        adminLines.push(
-          `- ${item.quantity}× ${item.item.name} — ${formatMoney(
-            Number(item.item.price) * item.quantity,
-            vendor.currency,
-          )}`,
-        );
-      }
-      adminLines.push(``, `Total: ${formatMoney(pendingOrder.total, vendor.currency)}`);
-
       return {
-        text: lines.join("\n"),
+        text: `Awesome! Would you like *Delivery* or *Pickup*?`,
         handover: false,
-        adminAlert: adminLines.join("\n"),
-        adminAlertButtons: [
-          { id: `confirm ${order.shortId}`, title: "Confirm Order" },
-          { id: `reject ${order.shortId}`, title: "Reject Order" }
-        ],
       };
     }
 
@@ -1652,12 +1673,16 @@ async function computeBotReply(
 
   // Menu request
   if (startsWithAny(body, menuTriggers)) {
-    const menuText = await buildMenuMessage(vendor);
+    const menuResult = await buildMenuMessage(vendor);
     const proactive = await tryProactiveUsual(vendor, conversation, null);
     if (proactive) {
-      return { text: `${proactive.text}\n\n${menuText}`, handover: false };
+      return { 
+        text: `${proactive.text}\n\n${menuResult.text}`, 
+        list: menuResult.list,
+        handover: false 
+      };
     }
-    return { text: menuText, handover: false };
+    return { text: menuResult.text, list: menuResult.list, handover: false };
   }
 
   // Greeting / welcome
@@ -1671,19 +1696,77 @@ async function computeBotReply(
     return { text: welcome, handover: false };
   }
 
-  // ── AI-powered fallback for ambiguous messages (Fix 5.4) ──
+  // ── AI-powered fallback for ambiguous messages ──
   try {
-    const aiResponse = await aiExtractOrder(
+    const intentResult = await detectCustomerIntent(
       body,
       activeItems.map((item) => ({ name: item.name, price: item.price })),
-      conversationHistory,
     );
-    if (aiResponse && aiResponse.length > 0) {
-      // The AI found order items in an ambiguously phrased message
-      return await buildPendingOrderState(vendor, conversation, body);
+
+    if (intentResult && intentResult.confidence > 0.7) {
+      if (intentResult.intent === "track_order") {
+        const [latestOrder] = await db
+          .select()
+          .from(ordersTable)
+          .where(
+            and(
+              eq(ordersTable.vendorId, vendor.id),
+              eq(ordersTable.customerPhone, conversation.customerPhone),
+            ),
+          )
+          .orderBy(desc(ordersTable.createdAt))
+          .limit(1);
+
+        if (latestOrder) {
+          return {
+            text: `I've pinged the vendor to check on your order #${latestOrder.shortId}. We'll let you know shortly!`,
+            handover: false,
+            adminAlert: `Customer ${conversation.customerName} (${conversation.customerPhone}) is asking for an update on order #${latestOrder.shortId}.`,
+            adminAlertButtons: [
+              { id: `eta ${latestOrder.shortId} 5`, title: "5 mins" },
+              { id: `eta ${latestOrder.shortId} 15`, title: "15 mins" },
+              { id: `eta ${latestOrder.shortId} 30`, title: "30 mins" }
+            ],
+          };
+        }
+      } else if (intentResult.intent === "paid_order") {
+        // Handled by the 'paid' trigger earlier, but we can catch it here too
+        const [latestOrder] = await db
+          .select()
+          .from(ordersTable)
+          .where(
+            and(
+              eq(ordersTable.vendorId, vendor.id),
+              eq(ordersTable.customerPhone, conversation.customerPhone),
+              eq(ordersTable.status, "confirmed"),
+            ),
+          )
+          .orderBy(desc(ordersTable.createdAt))
+          .limit(1);
+
+        if (latestOrder) {
+          return {
+            text: `Thanks! 🎉 We've notified the vendor of your payment — they'll confirm shortly.`,
+            handover: false,
+            adminAlert: `Customer ${conversation.customerName} (${conversation.customerPhone}) reports payment for order #${latestOrder.shortId}.`,
+            adminAlertButtons: [
+              { id: `paid ${latestOrder.shortId}`, title: "Confirm Payment" }
+            ],
+          };
+        }
+      } else if (intentResult.intent === "order") {
+        const aiResponse = await aiExtractOrder(
+          body,
+          activeItems.map((item) => ({ name: item.name, price: item.price })),
+          conversationHistory,
+        );
+        if (aiResponse && aiResponse.length > 0) {
+          return await buildPendingOrderState(vendor, conversation, body);
+        }
+      }
     }
-  } catch {
-    // AI fallback failed — continue to generic fallback
+  } catch (err) {
+    logger.warn({ err }, "AI intent detection/extraction failed");
   }
 
   // Fallback to conversational AI
@@ -1738,7 +1821,17 @@ export async function notifyOrderConfirmedToCustomer(args: {
 // Admin command system (vendor sending commands from their personal number)
 // ────────────────────────────────────────────────────────────────────────────
 
-type AdminReply = { text: string | null };
+type AdminReply = { 
+  text: string | null;
+  buttons?: Array<{ id: string; title: string }>;
+  list?: {
+    buttonText: string;
+    sections: Array<{
+      title: string;
+      rows: Array<{ id: string; title: string; description?: string }>;
+    }>;
+  };
+};
 
 export async function handleAdminCommand(
   vendor: VendorRow,
@@ -1755,27 +1848,29 @@ export async function handleAdminCommand(
 
   // /help
   if (lower === "/help" || lower === "help" || lower === "?") {
-    const proLine = vendor.plan === "pro" ? "" : " (Pro plan only)";
+    const proLine = vendor.plan === "pro" ? " (Pro features included)" : "";
     return {
-      text: [
-        `*Vendor commands*`,
-        `- *menu* — show your menu`,
-        `- *add <name> <price>* — add a menu item (e.g. "add Jollof Rice 2500")`,
-        `- *remove <name>* — remove a menu item`,
-        `- *orders* — list pending orders`,
-        `- *confirm [id]* — confirm latest or specific order`,
-        `- *reject [id]* — reject latest or specific order`,
-        `- *paid [id]* — mark order as paid`,
-        `- */bot [phone]* — return to bot mode (all chats or one)`,
-        `- */human <phone>* — take a chat over manually`,
-        ``,
-        `*Pro features*${proLine}`,
-        `- */promo add <text>* — add a promotion shown with the menu`,
-        `- */promo list* — see active promotions`,
-        `- */promo off* — disable all promotions`,
-        `- */broadcast <message>* — send to recent customers`,
-        `- */followups on|off|run* — auto reminders for unpaid orders`,
-      ].join("\n"),
+      text: `*Vendor Admin Menu*${proLine}\nChoose an action below to manage your store, or type a command like "add Jollof Rice 2500".`,
+      list: {
+        buttonText: "Manage Store",
+        sections: [
+          {
+            title: "Orders",
+            rows: [
+              { id: "orders", title: "View Pending Orders" },
+            ]
+          },
+          {
+            title: "Menu & Bot",
+            rows: [
+              { id: "menu", title: "View Menu" },
+              { id: "/promo list", title: "View Promos" },
+              { id: "/bot on", title: "Bot ON (Enable)" },
+              { id: "/bot off", title: "Bot OFF (Disable)" },
+            ]
+          }
+        ]
+      }
     };
   }
 
@@ -2086,7 +2181,13 @@ export async function handleAdminCommand(
     return await handleAdminConfirmPayment(vendor, id);
   }
 
-  // Fallback
+  // eta [id] [time]
+  if (lower.startsWith("eta ")) {
+    const parts = body.split(" ");
+    const id = parts[1] || null;
+    const time = parts.slice(2).join(" ") || null;
+    return await handleAdminProvideEta(vendor, id, time);
+  }
   return {
     text: [
       `Command not recognized. Reply */help* for the full list.`,
@@ -2123,6 +2224,8 @@ async function handleAdminIntent(
       return await handleAdminRejectOrder(vendor, orderId);
     case "confirm_payment":
       return await handleAdminConfirmPayment(vendor, orderId);
+    case "provide_eta":
+      return await handleAdminProvideEta(vendor, orderId, normalizeAdminEntityString(entities.eta));
     case "switch_human":
       return await handleAdminSwitchHuman(vendor, customerPhone);
     case "switch_bot":
@@ -2289,6 +2392,7 @@ async function handleAdminConfirmOrder(
     vendor,
     order.customerPhone,
     paymentInstructions(vendor, Number(order.total)),
+    [{ id: "paid", title: "I Have Paid" }, { id: "cancel", title: "Cancel Order" }]
   );
   return {
     text: `Confirmed #${order.shortId} for ${order.customerName}. Payment instructions were sent to the customer.`,
@@ -2331,10 +2435,12 @@ async function handleAdminConfirmPayment(
   if (order.paymentStatus === "paid") {
     return { text: `Order #${order.shortId} is already marked paid.` };
   }
+  
   await db
     .update(ordersTable)
     .set({ status: "paid", paymentStatus: "paid" })
     .where(eq(ordersTable.id, order.id));
+
   await db.insert(paymentsTable).values({
     vendorId: vendor.id,
     orderId: order.id,
@@ -2345,6 +2451,7 @@ async function handleAdminConfirmPayment(
     status: "confirmed",
     reference: "vendor_confirmed_via_chat",
   });
+
   await db
     .insert(customersTable)
     .values({
@@ -2363,14 +2470,37 @@ async function handleAdminConfirmPayment(
         lastSeenAt: new Date(),
       },
     });
+
   await notifyCustomer(
     vendor,
     order.customerPhone,
-    `Payment received for order #${order.shortId}. Thank you!`,
+    `Great news! We've confirmed your payment for order #${order.shortId}. Your order is on the way/being prepared! 🎉`,
   );
+
   return {
-    text: `Payment confirmed on #${order.shortId}. The customer was notified.`,
+    text: `Marked #${order.shortId} as paid. The customer was notified.`,
   };
+}
+
+async function handleAdminProvideEta(
+  vendor: VendorRow,
+  orderId: string | null,
+  eta: string | null,
+): Promise<AdminReply> {
+  if (!orderId || !eta) {
+    return { text: `Please provide an order ID and an ETA. For example: eta 12345678 15 mins` };
+  }
+  
+  const order = await findOrderByShortId(vendor.id, orderId);
+  if (!order) return { text: `No matching order found.` };
+
+  await notifyCustomer(
+    vendor,
+    order.customerPhone,
+    `Update on your order #${order.shortId}: It will take about ${eta} to arrive/be ready!`,
+  );
+
+  return { text: `Notified customer that order #${order.shortId} ETA is ${eta}.` };
 }
 
 async function handleAdminSwitchHuman(

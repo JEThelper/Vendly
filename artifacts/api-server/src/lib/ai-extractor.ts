@@ -199,7 +199,7 @@ export async function aiExtractAdminIntent(
   const historyContext = recentHistory && recentHistory.length > 0
     ? `\n\nRecent conversation for context:\n${recentHistory.map((m) => `${m.role === "admin" ? "Vendor" : "Bot"}: ${m.text}`).join("\n")}\n\nNow analyze the LATEST message below.`
     : "";
-  const prompt = `Analyze this vendor message and return ONLY valid JSON in the form {"intent":"<intent>","entities":{...}}. Allowed intents: add_menu_item, remove_menu_item, update_price, mark_unavailable, mark_available, show_menu, confirm_order, reject_order, confirm_payment, switch_human, switch_bot. Use entity names such as itemName, price, orderId, customerPhone. If the intent is unclear, return {"intent":"unknown","entities":{}}. Do not include any extra text.${historyContext}\n\nMessage: ${text}`;
+  const prompt = `Analyze this vendor message and return ONLY valid JSON in the form {"intent":"<intent>","entities":{...}}. Allowed intents: add_menu_item, remove_menu_item, update_price, mark_unavailable, mark_available, show_menu, confirm_order, reject_order, confirm_payment, switch_human, switch_bot, provide_eta. Use entity names such as itemName, price, orderId, customerPhone, eta. If the intent is unclear, return {"intent":"unknown","entities":{}}. Do not include any extra text.${historyContext}\n\nMessage: ${text}`;
 
   const content = await runLLM(prompt);
   if (!content) return null;
@@ -229,7 +229,7 @@ export async function aiExtractAdminIntent(
 }
 
 export type CustomerIntent = {
-  intent: "order" | "menu" | "status" | "price_inquiry" | "timing_inquiry" | "help" | "unknown";
+  intent: "order" | "menu" | "status" | "price_inquiry" | "timing_inquiry" | "help" | "track_order" | "paid_order" | "unknown";
   confidence: number;  // 0-1
 };
 
@@ -246,7 +246,7 @@ export async function detectCustomerIntent(
     : "";
   
   const prompt = `Analyze this customer message and return ONLY valid JSON in the form {"intent":"<intent>","confidence":<0-1>}. 
-Possible intents: "order" (wants to order items), "menu" (wants to see/ask about menu), "status" (asking about order status), "price_inquiry" (asking about prices), "timing_inquiry" (asking delivery/preparation time), "help" (needs help), "unknown" (unclear).${menuContext}
+Possible intents: "order" (wants to order items), "menu" (wants to see/ask about menu), "status" (asking about order status), "price_inquiry" (asking about prices), "timing_inquiry" (asking delivery/preparation time), "track_order" (tracking an existing order), "paid_order" (saying they have paid), "help" (needs help), "unknown" (unclear).${menuContext}
 
 Return JSON like: {"intent":"menu","confidence":0.95}
 

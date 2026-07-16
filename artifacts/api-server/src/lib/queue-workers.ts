@@ -71,6 +71,7 @@ export async function setupQueueWorkers(): Promise<void> {
         text: data.text,
         idempotencyKey: data.idempotencyKey,
         buttons: data.buttons,
+        list: data.list,
       });
 
       if (!result.ok || !result.delivered) {

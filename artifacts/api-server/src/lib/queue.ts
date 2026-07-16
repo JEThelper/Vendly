@@ -36,6 +36,13 @@ export interface OutboundMessageJob {
   attempt: number;
   idempotencyKey?: string;
   buttons?: Array<{ id: string; title: string }>;
+  list?: {
+    buttonText: string;
+    sections: Array<{
+      title: string;
+      rows: Array<{ id: string; title: string; description?: string }>;
+    }>;
+  };
 }
 
 export interface BroadcastMessageJob {
@@ -193,6 +200,13 @@ export async function queueOutboundMessage(
   text: string,
   idempotencyKey?: string,
   buttons?: Array<{ id: string; title: string }>,
+  list?: {
+    buttonText: string;
+    sections: Array<{
+      title: string;
+      rows: Array<{ id: string; title: string; description?: string }>;
+    }>;
+  },
 ): Promise<void> {
   logger.info({ phoneNumberId, to }, "Enqueueing outbound message with vendor phoneNumberId");
   await outboundQueue.add(
@@ -204,6 +218,7 @@ export async function queueOutboundMessage(
       attempt: 1,
       idempotencyKey,
       buttons,
+      list,
     } as OutboundMessageJob,
     {
       priority: 1,  // High priority for customer-facing messages

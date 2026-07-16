@@ -31,6 +31,8 @@ export interface Vendor {
   currency?: string;
   welcomeMessage?: string | null;
   followUpsEnabled?: boolean;
+  requiresDeliveryAddress?: boolean;
+  deliveryLocations?: string[] | null;
   createdAt: string;
 }
 
@@ -63,6 +65,8 @@ export interface CreateVendorBody {
   bankAccountHolder?: string;
   currency?: string;
   welcomeMessage?: string;
+  requiresDeliveryAddress?: boolean;
+  deliveryLocations?: string[];
 }
 
 export interface UpdateVendorBody {
@@ -79,6 +83,8 @@ export interface UpdateVendorBody {
   bankAccountHolder?: string;
   currency?: string;
   welcomeMessage?: string;
+  requiresDeliveryAddress?: boolean;
+  deliveryLocations?: string[];
 }
 
 export interface MenuItem {

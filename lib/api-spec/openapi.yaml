@@ -595,6 +595,11 @@ components:
         currency: { type: string }
         welcomeMessage: { type: string, nullable: true }
         followUpsEnabled: { type: boolean }
+        requiresDeliveryAddress: { type: boolean }
+        deliveryLocations:
+          type: array
+          items: { type: string }
+          nullable: true
         createdAt: { type: string, format: date-time }
 
     VendorDetail:
@@ -642,6 +647,10 @@ components:
         bankAccountHolder: { type: string }
         currency: { type: string }
         welcomeMessage: { type: string }
+        requiresDeliveryAddress: { type: boolean }
+        deliveryLocations:
+          type: array
+          items: { type: string }
 
     UpdateVendorBody:
       type: object
@@ -659,6 +668,10 @@ components:
         bankAccountHolder: { type: string }
         currency: { type: string }
         welcomeMessage: { type: string }
+        requiresDeliveryAddress: { type: boolean }
+        deliveryLocations:
+          type: array
+          items: { type: string }
 
     MenuItem:
       type: object

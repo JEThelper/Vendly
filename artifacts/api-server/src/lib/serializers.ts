@@ -27,6 +27,7 @@ export function toVendor(row: VendorRow) {
     welcomeMessage: row.welcomeMessage,
     followUpsEnabled: row.followUpsEnabled,
     requiresDeliveryAddress: row.requiresDeliveryAddress,
+    deliveryLocations: row.deliveryLocations as string[] | null,
     createdAt: row.createdAt.toISOString(),
   };
 }

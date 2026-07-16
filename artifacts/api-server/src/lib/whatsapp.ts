@@ -7,6 +7,13 @@ export type OutboundMessage = {
   text: string;
   idempotencyKey?: string;  // For retries
   buttons?: Array<{ id: string; title: string }>;
+  list?: {
+    buttonText: string;
+    sections: Array<{
+      title: string;
+      rows: Array<{ id: string; title: string; description?: string }>;
+    }>;
+  };
 };
 
 export type SendMessageResult = {
@@ -69,8 +76,24 @@ export async function sendWhatsAppMessage(
         body: JSON.stringify({
           messaging_product: "whatsapp",
           to: msg.to,
-          type: msg.buttons && msg.buttons.length > 0 ? "interactive" : "text",
-          ...(msg.buttons && msg.buttons.length > 0 ? {
+          type: msg.list && msg.list.sections.length > 0 ? "interactive" : (msg.buttons && msg.buttons.length > 0 ? "interactive" : "text"),
+          ...(msg.list && msg.list.sections.length > 0 ? {
+            interactive: {
+              type: "list",
+              body: { text: msg.text },
+              action: {
+                button: msg.list.buttonText.slice(0, 20),
+                sections: msg.list.sections.map(sec => ({
+                  title: sec.title.slice(0, 24),
+                  rows: sec.rows.map(r => ({
+                    id: r.id.slice(0, 200),
+                    title: r.title.slice(0, 24),
+                    ...(r.description ? { description: r.description.slice(0, 72) } : {})
+                  }))
+                }))
+              }
+            }
+          } : msg.buttons && msg.buttons.length > 0 ? {
             interactive: {
               type: "button",
               body: { text: msg.text },

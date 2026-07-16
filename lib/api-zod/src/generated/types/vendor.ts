@@ -22,5 +22,7 @@ export interface Vendor {
   currency?: string;
   welcomeMessage?: string | null;
   followUpsEnabled?: boolean;
+  requiresDeliveryAddress?: boolean;
+  deliveryLocations?: string[] | null;
   createdAt: Date;
 }

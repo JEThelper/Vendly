@@ -80,6 +80,7 @@ export const ListVendorsResponseItem = zod.object({
   welcomeMessage: zod.string().nullish(),
   followUpsEnabled: zod.boolean().optional(),
   requiresDeliveryAddress: zod.boolean().optional(),
+  deliveryLocations: zod.array(zod.string()).nullish(),
   createdAt: zod.coerce.date(),
 });
 export const ListVendorsResponse = zod.array(ListVendorsResponseItem);
@@ -103,6 +104,7 @@ export const CreateVendorBody = zod.object({
   currency: zod.string().optional(),
   welcomeMessage: zod.string().optional(),
   requiresDeliveryAddress: zod.boolean().optional(),
+  deliveryLocations: zod.array(zod.string()).optional(),
 });
 
 /**
@@ -129,6 +131,7 @@ export const GetVendorResponse = zod
     welcomeMessage: zod.string().nullish(),
     followUpsEnabled: zod.boolean().optional(),
     requiresDeliveryAddress: zod.boolean().optional(),
+    deliveryLocations: zod.array(zod.string()).nullish(),
     createdAt: zod.coerce.date(),
   })
   .and(
@@ -168,6 +171,7 @@ export const UpdateVendorBody = zod.object({
   currency: zod.string().optional(),
   welcomeMessage: zod.string().optional(),
   requiresDeliveryAddress: zod.boolean().optional(),
+  deliveryLocations: zod.array(zod.string()).optional(),
 });
 
 export const UpdateVendorResponse = zod.object({
@@ -186,6 +190,7 @@ export const UpdateVendorResponse = zod.object({
   welcomeMessage: zod.string().nullish(),
   followUpsEnabled: zod.boolean().optional(),
   requiresDeliveryAddress: zod.boolean().optional(),
+  deliveryLocations: zod.array(zod.string()).nullish(),
   createdAt: zod.coerce.date(),
 });
 

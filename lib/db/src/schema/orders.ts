@@ -17,7 +17,7 @@ export type OrderItemJson = {
   unitPrice: number;
 };
 
-export const orderStatusEnum = pgEnum("order_status", ["pending", "confirmed", "paid", "rejected", "cancelled"]);
+export const orderStatusEnum = pgEnum("order_status", ["pending", "awaiting_payment", "payment_pending_confirmation", "paid", "confirmed", "on_the_way", "delivered", "rejected", "cancelled"]);
 export const paymentStatusEnum = pgEnum("payment_status", ["pending", "paid", "refunded"]);
 
 export const ordersTable = pgTable("orders", {
@@ -32,6 +32,8 @@ export const ordersTable = pgTable("orders", {
   customerName: text("customer_name").notNull(),
   status: orderStatusEnum("status").notNull().default("pending"),
   paymentStatus: paymentStatusEnum("payment_status").notNull().default("pending"),
+  deliveryType: text("delivery_type"),
+  deliveryLocation: text("delivery_location"),
   total: numeric("total", { precision: 12, scale: 2 }).notNull(),
   currency: text("currency").notNull().default("USD"),
   items: jsonb("items").$type<OrderItemJson[]>().notNull(),

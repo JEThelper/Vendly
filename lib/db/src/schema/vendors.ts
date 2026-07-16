@@ -4,6 +4,7 @@ import {
   uuid,
   boolean,
   timestamp,
+  jsonb,
 } from "drizzle-orm/pg-core";
 
 export const vendorsTable = pgTable("vendors", {
@@ -22,6 +23,7 @@ export const vendorsTable = pgTable("vendors", {
   welcomeMessage: text("welcome_message"),
   followUpsEnabled: boolean("follow_ups_enabled").notNull().default(false),
   requiresDeliveryAddress: boolean("requires_delivery_address").notNull().default(false),
+  deliveryLocations: jsonb("delivery_locations").$type<string[]>().default([]),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
