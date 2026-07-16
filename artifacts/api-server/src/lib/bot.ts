@@ -243,7 +243,7 @@ async function findOrderByShortId(vendorId: string, shortId: string): Promise<Or
     .where(
       and(
         eq(ordersTable.vendorId, vendorId),
-        sql`${ordersTable.id} LIKE ${shortId}%`,
+        sql`${ordersTable.id} LIKE ${shortId + "%"}`,
       ),
     )
     .limit(1);
