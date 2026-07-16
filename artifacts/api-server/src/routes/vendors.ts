@@ -50,6 +50,7 @@ router.post("/vendors", async (req, res) => {
         bankAccountHolder: data.bankAccountHolder ?? null,
         welcomeMessage: data.welcomeMessage ?? null,
         requiresDeliveryAddress: data.requiresDeliveryAddress ?? false,
+        deliveryLocations: data.deliveryLocations ?? [],
       })
       .returning();
     return res.status(201).json(toVendor(created!));
@@ -157,6 +158,7 @@ router.patch("/vendors/:vendorId", async (req, res) => {
     "currency",
     "welcomeMessage",
     "requiresDeliveryAddress",
+    "deliveryLocations",
   ] as const) {
     if (body.data[k] !== undefined) updates[k] = body.data[k];
   }

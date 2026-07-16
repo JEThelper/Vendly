@@ -307,3 +307,95 @@ Reply directly as the bot. No JSON, just the text response.`;
   const content = await runLLM(prompt);
   return content;
 }
+
+export type OrderModificationResult = {
+  type: "modification" | "new_order" | "unrelated";
+  items?: ExtractedOrder[];
+};
+
+/**
+ * Detects whether a customer message is a modification to their existing pending order,
+ * a completely new order, or something unrelated to ordering.
+ * When a modification is detected, returns the COMPLETE updated order (not just the diff).
+ */
+export async function aiDetectOrderModification(
+  text: string,
+  menuItems: Array<{ name: string; price: string }>,
+  currentOrderItems: Array<{ item: string; quantity: number }>,
+  recentHistory?: Array<{ role: "customer" | "bot"; text: string }>,
+): Promise<OrderModificationResult | null> {
+  const menuContext = menuItems.length > 0
+    ? `\nAvailable menu items:\n${menuItems.map((m) => `- ${m.name} (${m.price})`).join("\n")}`
+    : "";
+
+  const currentOrderContext = currentOrderItems
+    .map((o) => `- ${o.quantity}x ${o.item}`)
+    .join("\n");
+
+  const historyContext = recentHistory && recentHistory.length > 0
+    ? `\nRecent conversation:\n${recentHistory.map((m) => `${m.role === "customer" ? "Customer" : "Bot"}: ${m.text}`).join("\n")}`
+    : "";
+
+  const prompt = `The customer currently has a pending order with these items:
+${currentOrderContext}
+
+They were asked to confirm with YES or reply NO to cancel.${menuContext}${historyContext}
+
+The customer just said: "${text}"
+
+Determine what the customer wants:
+1. If they are MODIFYING the existing order (changing quantities, adding items, removing items, replacing items), return the COMPLETE UPDATED order with all items and quantities. Use item names exactly as they appear on the menu.
+2. If they are placing a COMPLETELY NEW unrelated order (discarding the old one entirely), return type "new_order".
+3. If the message is UNRELATED to ordering (asking a question, greeting, etc.), return type "unrelated".
+
+Return ONLY valid JSON in one of these formats:
+- Modification: {"type":"modification","items":[{"item":"<exact menu item name>","quantity":<integer>},...]}
+- New order: {"type":"new_order"}
+- Unrelated: {"type":"unrelated"}`;
+
+  const content = await runLLM(prompt);
+  if (!content) return null;
+
+  logger.debug({ aiResponse: content }, "AI order modification detection response");
+
+  try {
+    const parsed = parseJsonResponse(content) as any;
+    if (!parsed || typeof parsed.type !== "string") {
+      logger.debug({ parsed }, "AI order modification response invalid shape");
+      return null;
+    }
+
+    if (parsed.type === "modification") {
+      if (!Array.isArray(parsed.items) || parsed.items.length === 0) {
+        logger.debug({ parsed }, "AI modification response missing items");
+        return null;
+      }
+
+      const items: ExtractedOrder[] = [];
+      for (const raw of parsed.items) {
+        if (!raw || typeof raw.item !== "string" || raw.item.trim() === "") {
+          return null;
+        }
+        const quantity = Number(raw.quantity ?? 1);
+        if (!Number.isInteger(quantity) || quantity < 1) {
+          return null;
+        }
+        items.push({ item: raw.item.trim(), quantity });
+      }
+      return { type: "modification", items };
+    }
+
+    if (parsed.type === "new_order") {
+      return { type: "new_order" };
+    }
+
+    if (parsed.type === "unrelated") {
+      return { type: "unrelated" };
+    }
+
+    return null;
+  } catch (err) {
+    logger.warn({ err }, "AI order modification detection failed");
+    return null;
+  }
+}

@@ -41,6 +41,7 @@ export const ordersTable = pgTable("orders", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  eta: text("eta"),
 }, (table) => ({
   vendorStatusIdx: index("vendor_status_idx")
     .on(table.vendorId, table.status),

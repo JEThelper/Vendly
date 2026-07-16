@@ -19,7 +19,7 @@ import { and, eq, sql, desc, gte, inArray } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./whatsapp";
 import { logger } from "./logger";
 import { hasFeature } from "./plans";
-import { aiExtractOrder, aiExtractAdminIntent, generateChatResponse, detectCustomerIntent, type ExtractedAdminIntent, type ExtractedOrder } from "./ai-extractor";
+import { aiExtractOrder, aiExtractAdminIntent, generateChatResponse, detectCustomerIntent, aiDetectOrderModification, type ExtractedAdminIntent, type ExtractedOrder } from "./ai-extractor";
 import {
   setPendingOrder,
   getPendingOrder,
@@ -1559,6 +1559,21 @@ async function computeBotReply(
         handover: false,
       };
     }
+
+    // Check if this is a modification to the pending order
+    const modResult = await aiDetectOrderModification(
+      body,
+      activeItems.map(i => ({ name: i.name, price: i.price.toString() })),
+      pendingOrder.resolvedItems.map(i => ({ item: i.itemName, quantity: i.quantity })),
+      conversationHistory,
+    );
+
+    if (modResult?.type === "modification" && modResult.items && modResult.items.length > 0) {
+      // Re-run buildPendingOrderState with the AI's merged result
+      return await buildPendingOrderState(vendor, conversation, body, modResult.items, conversationHistory);
+    }
+    // If type is "new_order", fall through to normal order detection
+    // If type is "unrelated", fall through to menu/greeting/AI fallback
   }
 
   // ── Cancel order command (BEFORE order detection to prevent "cancel my order of rice" matching as an order) ──
@@ -1638,7 +1653,14 @@ async function computeBotReply(
       cancelled: `🚫 Your order #${latestOrder.shortId} was cancelled.`,
     };
 
-    const msg = statusMessages[latestOrder.status] ?? `Your order #${latestOrder.shortId} status: ${latestOrder.status}.`;
+    let msg = statusMessages[latestOrder.status] ?? `Your order #${latestOrder.shortId} status: ${latestOrder.status}.`;
+    
+    // @ts-ignore ETA is added to schema but TypeScript might not know yet
+    if (latestOrder.eta && (latestOrder.status === "paid" || latestOrder.status === "confirmed")) {
+      // @ts-ignore
+      msg += `\n\n⏱️ *ETA:* ${latestOrder.eta}`;
+    }
+
     return { text: msg, handover: false };
   }
 
@@ -2192,9 +2214,67 @@ export async function handleAdminCommand(
     const time = parts.slice(2).join(" ") || null;
     return await handleAdminProvideEta(vendor, id, time);
   }
+
+  // ── AI-powered admin intent extraction fallback ──
+  // When no rigid command matches, try to understand the admin's natural language
+  try {
+    // Retrieve recent admin conversation history for context
+    const recentAdminHistory: Array<{ role: "admin" | "bot"; text: string }> = [];
+
+    const extracted = await aiExtractAdminIntent(body, recentAdminHistory);
+    if (extracted && extracted.intent !== "unknown") {
+      const result = await handleAdminIntent(vendor, extracted);
+      if (result) return result;
+    }
+  } catch (err) {
+    logger.warn({ err }, "AI admin intent extraction failed");
+  }
+
+  // ── Conversational AI fallback for admin ──
+  // Same underlying intelligence as customer side
+  try {
+    const activeItems = await listActiveMenuItems(vendor);
+    const pendingOrders = await db
+      .select()
+      .from(ordersTable)
+      .where(
+        and(
+          eq(ordersTable.vendorId, vendor.id),
+          eq(ordersTable.status, "pending"),
+        ),
+      )
+      .orderBy(desc(ordersTable.createdAt))
+      .limit(5);
+
+    const orderContext = pendingOrders.length > 0
+      ? `\n\nPending orders:\n${pendingOrders.map(o => `#${o.shortId} — ${o.customerName} — ${formatMoney(Number(o.total), vendor.currency)} (${o.status})`).join("\n")}`
+      : "\n\nNo pending orders right now.";
+
+    const adminChatPrompt = `You are a helpful AI assistant for ${vendor.name}'s admin dashboard on WhatsApp.
+You help the vendor manage their business. Keep answers short (1-3 sentences) since this is WhatsApp.
+Available admin commands: /help, menu, add <item> <price>, remove <item>, orders, confirm <id>, reject <id>, paid <id>, eta <id> <time>, /broadcast <msg>, /bot, /human <phone>.
+
+Available menu items:
+${activeItems.map(m => `- ${m.name} (${formatMoney(Number(m.price), vendor.currency)}) ${m.available ? "" : "(unavailable)"}`).join("\n")}
+${orderContext}
+
+The admin just said: "${body}"
+
+If they're asking about something you can help with (order status, menu info, business questions), answer directly.
+If they seem to want to perform an action, tell them the right command to use.
+Reply directly as the bot assistant. No JSON, just the text response.`;
+
+    const aiChat = await runLLM(adminChatPrompt);
+    if (aiChat) {
+      return { text: aiChat };
+    }
+  } catch (err) {
+    logger.warn({ err }, "AI admin chat response failed");
+  }
+
   return {
     text: [
-      `Command not recognized. Reply */help* for the full list.`,
+      `I'm not sure what you mean. Reply */help* for the full command list, or just ask me naturally!`,
     ].join("\n"),
   };
 }
@@ -2392,6 +2472,15 @@ async function handleAdminConfirmOrder(
     .update(ordersTable)
     .set({ status: "confirmed" })
     .where(eq(ordersTable.id, order.id));
+
+  // Step 1: Send explicit order confirmation message
+  await notifyCustomer(
+    vendor,
+    order.customerPhone,
+    `✅ *Your order #${order.shortId} has been confirmed!*\n\nThe vendor is getting everything ready for you.`,
+  );
+
+  // Step 2: Send payment instructions
   await notifyCustomer(
     vendor,
     order.customerPhone,
@@ -2399,7 +2488,7 @@ async function handleAdminConfirmOrder(
     [{ id: "paid", title: "I Have Paid" }, { id: "cancel", title: "Cancel Order" }]
   );
   return {
-    text: `Confirmed #${order.shortId} for ${order.customerName}. Payment instructions were sent to the customer.`,
+    text: `Confirmed #${order.shortId} for ${order.customerName}. Confirmation + payment instructions sent to the customer.`,
   };
 }
 
@@ -2475,10 +2564,14 @@ async function handleAdminConfirmPayment(
       },
     });
 
+  const deliveryMsg = order.deliveryType === "pickup"
+    ? `Your order #${order.shortId} is ready for pickup! 🎉`
+    : `Your order #${order.shortId} is on the way! 🚀`;
+
   await notifyCustomer(
     vendor,
     order.customerPhone,
-    `Great news! We've confirmed your payment for order #${order.shortId}. Your order is on the way/being prepared! 🎉`,
+    `Great news! We've confirmed your payment. ${deliveryMsg}`,
   );
 
   return {
@@ -2497,6 +2590,11 @@ async function handleAdminProvideEta(
   
   const order = await findOrderByShortId(vendor.id, orderId);
   if (!order) return { text: `No matching order found.` };
+
+  await db
+    .update(ordersTable)
+    .set({ eta })
+    .where(eq(ordersTable.id, order.id));
 
   await notifyCustomer(
     vendor,
