@@ -15,15 +15,15 @@ import broadcastsRouter from "./broadcasts";
 const router: IRouter = Router();
 
 router.use(healthRouter);
-router.use("/vendors", requireApiKey, vendorsRouter);
-router.use("/menu", requireApiKey, menuRouter);
-router.use("/orders", requireApiKey, ordersRouter);
-router.use("/conversations", requireApiKey, conversationsRouter);
-router.use("/customers", requireApiKey, customersRouter);
-router.use("/payments", requireApiKey, paymentsRouter);
-router.use("/dashboard", requireApiKey, dashboardRouter);
+router.use(requireApiKey, vendorsRouter);
+router.use(requireApiKey, menuRouter);
+router.use(requireApiKey, ordersRouter);
+router.use(requireApiKey, conversationsRouter);
+router.use(requireApiKey, customersRouter);
+router.use(requireApiKey, paymentsRouter);
+router.use(requireApiKey, dashboardRouter);
 router.use(webhookRouter);
-router.use("/promotions", requireApiKey, promotionsRouter);
-router.use("/broadcasts", requireApiKey, broadcastsRouter);
+router.use(requireApiKey, promotionsRouter);
+router.use(requireApiKey, broadcastsRouter);
 
 export default router;
