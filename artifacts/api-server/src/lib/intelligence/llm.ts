@@ -3,7 +3,7 @@ import { LLMResponse } from "./types";
 import { logger } from "../logger";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
 
 const responseSchema = {
   type: SchemaType.OBJECT,
@@ -48,9 +48,16 @@ export async function processWithLLM(systemPrompt: string, userMessage: string):
       setTimeout(() => reject(new Error("LLM Timeout")), 10000);
     });
 
+    const model = genAI.getGenerativeModel(
+      { 
+        model: "gemini-1.5-flash",
+        systemInstruction: systemPrompt
+      },
+      { apiVersion: "v1beta" }
+    );
+
     const llmCall = model.generateContent({
       contents: [{ role: "user", parts: [{ text: userMessage }] }],
-      systemInstruction: systemPrompt,
       generationConfig: {
         responseMimeType: "application/json",
         responseSchema: responseSchema,
