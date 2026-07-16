@@ -15,6 +15,13 @@
       "when": 1784160950666,
       "tag": "0001_setup_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784238355682,
+      "tag": "0002_real_angel",
+      "breakpoints": true
     }
   ]
 }
