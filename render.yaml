@@ -2,7 +2,7 @@ services:
   - type: web
     name: vendly-api-server
     env: node
-    buildCommand: pnpm install && cd artifacts/api-server && pnpm run build
+    buildCommand: pnpm install && pnpm -r run build
     startCommand: cd artifacts/api-server && node dist/index.mjs
     envVars:
       - key: NODE_ENV
