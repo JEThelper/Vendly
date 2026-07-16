@@ -47,7 +47,7 @@ if (process.env.NODE_ENV === "production") {
 
 export const baseDb = drizzle(pool, { schema });
 
-const vendorContext = new AsyncLocalStorage<typeof baseDb>();
+export const vendorContext = new AsyncLocalStorage<typeof baseDb>();
 
 export const db = new Proxy({} as typeof baseDb, {
   get(target, prop) {

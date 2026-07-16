@@ -1,3 +1,4 @@
+import { requireApiKey } from "../middleware/auth";
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { menuItemsTable } from "@workspace/db";
@@ -14,6 +15,7 @@ import {
 import { toMenuItem } from "../lib/serializers";
 
 const router: IRouter = Router();
+router.use(requireApiKey);
 
 router.get("/vendors/:vendorId/menu", async (req, res) => {
   const params = GetVendorMenuParams.safeParse(req.params);

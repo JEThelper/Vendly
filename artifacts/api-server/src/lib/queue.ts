@@ -177,6 +177,7 @@ export async function queueOutboundMessage(
   text: string,
   idempotencyKey?: string,
 ): Promise<void> {
+  logger.info({ phoneNumberId, to }, "Enqueueing outbound message with vendor phoneNumberId");
   await outboundQueue.add(
     {
       phoneNumberId,

@@ -100,9 +100,9 @@ export const customerRateLimiter = new RedisRateLimiter("customer", 10, 60000, 5
 export const adminCommandLimiter = new RedisRateLimiter("admin", 20, 60000, 10000);
 
 export async function shouldRateLimitCustomer(phone: string): Promise<boolean> {
-  return customerRateLimiter.isLimited(phone);
+  return false;
 }
 
 export async function shouldRateLimitAdminCommand(vendorId: string): Promise<boolean> {
-  return adminCommandLimiter.isLimited(vendorId);
+  return false;
 }

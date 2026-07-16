@@ -1,3 +1,4 @@
+import { requireApiKey } from "../middleware/auth";
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import {
@@ -13,6 +14,7 @@ import { GetVendorAnalyticsParams } from "@workspace/api-zod";
 import { hasFeature } from "../lib/plans";
 
 const router: IRouter = Router();
+router.use(requireApiKey);
 
 // NOTE: This endpoint returns a summary of the authenticated vendor's data only.
 // It is NOT a platform-admin endpoint - it is vendor-scoped for security.

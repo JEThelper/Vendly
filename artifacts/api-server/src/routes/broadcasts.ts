@@ -1,3 +1,4 @@
+import { requireApiKey } from "../middleware/auth";
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import {
@@ -19,6 +20,7 @@ import { hasFeature } from "../lib/plans";
 import { queueOutboundMessage, queueBroadcastMessage } from "../lib/queue";
 
 const router: IRouter = Router();
+router.use(requireApiKey);
 
 router.get("/vendors/:vendorId/broadcasts", async (req, res) => {
   const params = ListVendorBroadcastsParams.safeParse(req.params);

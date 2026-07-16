@@ -1,3 +1,4 @@
+import { requireApiKey } from "../middleware/auth";
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { promotionsTable, vendorsTable } from "@workspace/db";
@@ -14,6 +15,7 @@ import { toPromotion } from "../lib/serializers";
 import { hasFeature } from "../lib/plans";
 
 const router: IRouter = Router();
+router.use(requireApiKey);
 
 router.get("/vendors/:vendorId/promotions", async (req, res) => {
   const params = ListVendorPromotionsParams.safeParse(req.params);

@@ -464,7 +464,9 @@ async function buildPendingOrderState(
     requests = parseOrderLine(body);
   } else {
     const mappedItems = activeItems.map(item => ({ name: item.name, price: item.price.toString() }));
+    logger.info("Before aiExtractOrder");
     const aiItems = await aiExtractOrder(body, mappedItems);
+    logger.info("After aiExtractOrder");
     if (aiItems) {
       requests = aiItems.map((order) => ({ kind: "name", name: order.item, quantity: order.quantity }));
     }
@@ -1190,7 +1192,9 @@ export async function handleIncomingMessage(args: {
     fromName,
   );
 
+  logger.info("Before recordMessage");
   await recordMessage(conversation.id, "in", "customer", body);
+  logger.info("After recordMessage");
 
   // Bot stays silent during human handover or when bot is disabled.
   if (
@@ -1206,7 +1210,9 @@ export async function handleIncomingMessage(args: {
     };
   }
 
+  logger.info("Before computeBotReply");
   const reply = await computeBotReply(vendor, conversation, body);
+  logger.info("After computeBotReply");
   if (reply.handover) {
     await db
       .update(conversationsTable)
@@ -1215,13 +1221,16 @@ export async function handleIncomingMessage(args: {
   }
 
   if (reply.text && vendor.phoneNumberId) {
+    logger.info("Before second recordMessage");
     await recordMessage(conversation.id, "out", "bot", reply.text);
+    logger.info({ phoneNumberId: vendor.phoneNumberId }, "After second recordMessage, before queueOutboundMessage");
     // Queue message for reliable delivery
     await queueOutboundMessage(
       vendor.phoneNumberId,
       fromPhone,
       reply.text,
     );
+    logger.info("After queueOutboundMessage");
   }
 
   // Notify the vendor's admin number when a new order was just placed,
@@ -1326,7 +1335,9 @@ async function computeBotReply(
   body: string,
 ): Promise<BotReply> {
   // Fetch active menu items once at the beginning for use in order detection and menu building
+  logger.info("computeBotReply: Before listActiveMenuItems");
   const activeItems = await listActiveMenuItems(vendor);
+  logger.info("computeBotReply: After listActiveMenuItems");
 
   // Retrieve recent conversation history for AI context (last 6 messages)
   const recentMessages = await db

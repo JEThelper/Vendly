@@ -72,12 +72,12 @@ export async function setupQueueWorkers(): Promise<void> {
         idempotencyKey: data.idempotencyKey,
       });
 
-      if (!result.ok) {
+      if (!result.ok || !result.delivered) {
         logger.warn(
           { jobId: job.id, to: data.to, reason: result.reason },
           "Message send failed",
         );
-        throw new Error(`Send failed: ${result.reason}`);
+        throw new Error(`Send failed: ${result.reason ?? "not delivered"}`);
       }
 
       logger.debug({ jobId: job.id, to: data.to, messageId: result.messageId }, "Message sent successfully");
@@ -104,11 +104,18 @@ export async function setupQueueWorkers(): Promise<void> {
 
       // Send with rate limiting
       for (const recipient of data.recipients) {
-        await sendWhatsAppMessage({
+        const result = await sendWhatsAppMessage({
           phoneNumberId: data.phoneNumberId,
           to: recipient.phone,
           text: data.message,
         });
+        
+        if (!result.ok || !result.delivered) {
+          logger.warn(
+            { jobId: job.id, to: recipient.phone, reason: result.reason },
+            "Broadcast message send failed",
+          );
+        }
 
         // Small delay between messages to avoid rate limiting
         await new Promise((resolve) => setTimeout(resolve, 50));

@@ -1,3 +1,4 @@
+import { requireApiKey } from "../middleware/auth";
 import { Router, type IRouter } from "express";
 import { z } from "zod";
 import { db } from "@workspace/db";
@@ -20,6 +21,7 @@ import {
 import { toVendor } from "../lib/serializers";
 
 const router: IRouter = Router();
+router.use(requireApiKey);
 
 router.get("/vendors", async (_req, res) => {
   const rows = await db.select().from(vendorsTable).orderBy(desc(vendorsTable.createdAt));

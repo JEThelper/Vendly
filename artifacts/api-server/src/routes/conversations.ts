@@ -1,3 +1,4 @@
+import { requireApiKey } from "../middleware/auth";
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import {
@@ -16,6 +17,7 @@ import {
 import { toConversation, toMessage } from "../lib/serializers";
 
 const router: IRouter = Router();
+router.use(requireApiKey);
 
 router.get("/vendors/:vendorId/conversations", async (req, res) => {
   const params = ListVendorConversationsParams.safeParse(req.params);

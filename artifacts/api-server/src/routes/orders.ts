@@ -1,3 +1,4 @@
+import { requireApiKey } from "../middleware/auth";
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import {
@@ -20,6 +21,7 @@ import { notifyOrderConfirmedToCustomer } from "../lib/bot";
 import { queueOutboundMessage } from "../lib/queue";
 
 const router: IRouter = Router();
+router.use(requireApiKey);
 
 router.get("/vendors/:vendorId/orders", async (req, res) => {
   const params = ListVendorOrdersParams.safeParse(req.params);

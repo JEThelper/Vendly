@@ -1,3 +1,4 @@
+import { requireApiKey } from "../middleware/auth";
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { customersTable } from "@workspace/db";
@@ -6,6 +7,7 @@ import { ListVendorCustomersParams } from "@workspace/api-zod";
 import { toCustomer } from "../lib/serializers";
 
 const router: IRouter = Router();
+router.use(requireApiKey);
 
 router.get("/vendors/:vendorId/customers", async (req, res) => {
   const params = ListVendorCustomersParams.safeParse(req.params);
