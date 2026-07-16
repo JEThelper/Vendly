@@ -43,7 +43,8 @@ export async function setupQueueWorkers(): Promise<void> {
       await withVendorContext(vendor.id, () => ConversationManager.handleIncomingMessage(
         vendor,
         data.fromPhone,
-        data.body
+        data.body,
+        data.fromName
       ));
 
       logger.debug({ jobId: job.id, phone: data.fromPhone }, "Incoming message processed successfully");

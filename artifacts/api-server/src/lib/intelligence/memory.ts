@@ -4,7 +4,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { MemoryContext } from "./types";
 import { getPendingOrder } from "../pending-orders";
 
-export async function loadContext(vendor: VendorRow, customerPhone: string): Promise<MemoryContext> {
+export async function loadContext(vendor: VendorRow, customerPhone: string, customerName?: string): Promise<MemoryContext> {
   // 1. Get conversation
   let conversation = await db.query.conversationsTable.findFirst({
     where: and(eq(conversationsTable.vendorId, vendor.id), eq(conversationsTable.customerPhone, customerPhone)),
@@ -14,6 +14,7 @@ export async function loadContext(vendor: VendorRow, customerPhone: string): Pro
     const insertData: any = {
       vendorId: vendor.id,
       customerPhone,
+      customerName: customerName || "Customer",
     };
     [conversation] = await db.insert(conversationsTable).values(insertData).returning();
   }

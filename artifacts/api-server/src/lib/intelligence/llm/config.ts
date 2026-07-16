@@ -25,7 +25,7 @@ export function loadLLMConfig(): GlobalLLMConfig {
     circuitBreakerResetTimeoutMs: Number(process.env.LLM_CIRCUIT_BREAKER_TIMEOUT || 60000),
     gemini: process.env.GEMINI_API_KEY ? {
       name: "Gemini",
-      model: process.env.GEMINI_MODEL || "gemini-1.5-flash",
+      model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
       apiKey: process.env.GEMINI_API_KEY,
       timeoutMs: Number(process.env.GEMINI_TIMEOUT_MS || 10000),
       maxRetries: Number(process.env.GEMINI_MAX_RETRIES || 2),
@@ -33,7 +33,7 @@ export function loadLLMConfig(): GlobalLLMConfig {
     } : undefined,
     groq: process.env.GROQ_API_KEY ? {
       name: "Groq",
-      model: process.env.GROQ_MODEL || "llama3-8b-8192",
+      model: process.env.GROQ_MODEL || "llama-3.1-8b-instant",
       apiKey: process.env.GROQ_API_KEY,
       timeoutMs: Number(process.env.GROQ_TIMEOUT_MS || 10000),
       maxRetries: Number(process.env.GROQ_MAX_RETRIES || 2),

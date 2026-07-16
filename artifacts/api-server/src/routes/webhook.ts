@@ -258,7 +258,8 @@ router.post("/webhook/whatsapp", async (req, res) => {
   const result = await withVendorContext(vendor.id, () => ConversationManager.handleIncomingMessage(
     vendor,
     body.data.from,
-    body.data.body
+    body.data.body,
+    (body.data as any).customerName || "Customer" // WhatsappWebhookBody might have it, or default
   ));
 
   return res.json({
@@ -291,7 +292,8 @@ router.post("/simulator/incoming", async (req, res) => {
     const result = await withVendorContext(vendor.id, () => ConversationManager.handleIncomingMessage(
       vendor,
       body.data.customerPhone,
-      body.data.body
+      body.data.body,
+      (body.data as any).customerName || "Customer"
     ));
 
     return res.json({

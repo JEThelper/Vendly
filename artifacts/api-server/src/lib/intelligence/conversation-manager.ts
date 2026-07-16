@@ -11,7 +11,8 @@ export class ConversationManager {
   static async handleIncomingMessage(
     vendor: VendorRow,
     customerPhone: string,
-    message: string
+    message: string,
+    customerName?: string
   ): Promise<{ text: string | null }> {
     
     // Check for system commands
@@ -23,7 +24,7 @@ export class ConversationManager {
 
     try {
       // 1. Gather context
-      const memory = await loadContext(vendor, customerPhone);
+      const memory = await loadContext(vendor, customerPhone, customerName);
 
       // 2. Build Prompt
       const systemPrompt = await buildSystemPrompt(vendor, memory);
