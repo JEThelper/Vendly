@@ -19,7 +19,7 @@ import { and, eq, sql, desc, gte, inArray } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./whatsapp";
 import { logger } from "./logger";
 import { hasFeature } from "./plans";
-import { aiExtractOrder, aiExtractAdminIntent, generateChatResponse, detectCustomerIntent, type ExtractedAdminIntent } from "./ai-extractor";
+import { aiExtractOrder, aiExtractAdminIntent, generateChatResponse, detectCustomerIntent, type ExtractedAdminIntent, type ExtractedOrder } from "./ai-extractor";
 import {
   setPendingOrder,
   getPendingOrder,
@@ -479,6 +479,8 @@ async function buildPendingOrderState(
   vendor: VendorRow,
   conversation: ConversationRow,
   body: string,
+  preExtractedOrder?: ExtractedOrder[] | null,
+  conversationHistory?: Array<{ role: "customer" | "bot"; text: string }>,
 ): Promise<BotReply> {
   const allItems = await listAllMenuItems(vendor);
   const activeItems = allItems.filter((item) => item.available);
@@ -498,7 +500,9 @@ async function buildPendingOrderState(
   } else {
     const mappedItems = activeItems.map(item => ({ name: item.name, price: item.price.toString() }));
     logger.info("Before aiExtractOrder");
-    const aiItems = await aiExtractOrder(body, mappedItems);
+    const aiItems = preExtractedOrder !== undefined 
+      ? preExtractedOrder 
+      : await aiExtractOrder(body, mappedItems, conversationHistory);
     logger.info("After aiExtractOrder");
     if (aiItems) {
       requests = aiItems.map((order) => ({ kind: "name", name: order.item, quantity: order.quantity }));
@@ -1662,7 +1666,7 @@ async function computeBotReply(
 
   // ── Order detection (after cancel/status to prevent false matches) ──
   if (looksLikeOrder(body, activeItems, vendor.id)) {
-    const pendingResponse = await buildPendingOrderState(vendor, conversation, body);
+    const pendingResponse = await buildPendingOrderState(vendor, conversation, body, null, conversationHistory);
     if (pendingResponse.text && pendingResponse.text.includes("I didn't catch your order")) {
       // It was a generic order intent, try proactive usual
       const proactive = await tryProactiveUsual(vendor, conversation);
@@ -1761,7 +1765,7 @@ async function computeBotReply(
           conversationHistory,
         );
         if (aiResponse && aiResponse.length > 0) {
-          return await buildPendingOrderState(vendor, conversation, body);
+          return await buildPendingOrderState(vendor, conversation, body, aiResponse, conversationHistory);
         }
       }
     }

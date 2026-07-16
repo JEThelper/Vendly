@@ -142,9 +142,9 @@ export async function aiExtractOrder(
     ? `\n\nAvailable menu items:\n${menuItems.map((m) => `- ${m.name} (${m.price})`).join("\n")}\n\nOnly extract items that closely match items from this menu.`
     : "";
   const historyContext = recentHistory && recentHistory.length > 0
-    ? `\n\nRecent conversation for context:\n${recentHistory.map((m) => `${m.role === "customer" ? "Customer" : "Bot"}: ${m.text}`).join("\n")}\n\nNow extract items from the LATEST message below.`
+    ? `\n\nRecent conversation for context:\n${recentHistory.map((m) => `${m.role === "customer" ? "Customer" : "Bot"}: ${m.text}`).join("\n")}\n\nBased on the entire conversation, determine the FULL and FINAL order the customer wants.`
     : "";
-  const prompt = `Extract food order details from this customer message. Return ONLY valid JSON. Use this exact shape:\n{\n  "items": [\n    { "item": "<product name exactly as on menu>", "quantity": <integer> }\n  ]\n}\nIf you cannot extract any order items, return null.${menuContext}${historyContext}\n\nCustomer message: ${text}`;
+  const prompt = `Extract food order details from this customer message. Return ONLY valid JSON. Use this exact shape:\n{\n  "items": [\n    { "item": "<product name exactly as on menu>", "quantity": <integer> }\n  ]\n}\nIf you cannot extract any order items, return null. If the customer is modifying an existing order, output the complete updated order.${menuContext}${historyContext}\n\nCustomer message: ${text}`;
 
   const content = await runLLM(prompt);
   if (!content) return null;
@@ -293,7 +293,7 @@ export async function generateChatResponse(
 Your goal is to answer the customer's message naturally and conversationally.
 You should keep your answers short (1-3 sentences) since this is WhatsApp.
 You can answer questions about the menu, prices, and general inquiries.
-If the customer wants to order, politely instruct them to use the format: "order <item> <quantity>" or reply with a menu item number.
+If the customer wants to order, politely acknowledge their request and guide them to select items from the menu.
 Do not invent prices or items that are not on the menu.
 Prices are in ${vendor.currency}.
 
