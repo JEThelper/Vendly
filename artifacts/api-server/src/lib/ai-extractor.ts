@@ -270,3 +270,40 @@ Message: ${text}`;
     return null;
   }
 }
+
+/**
+ * Generates a natural language response to customer questions using AI.
+ * Useful for handling FAQ, casual chat, and general inquiries.
+ */
+export async function generateChatResponse(
+  text: string,
+  vendor: { name: string; currency: string },
+  menuItems: Array<{ name: string; price: string }>,
+  recentHistory: Array<{ role: "customer" | "bot"; text: string }>,
+): Promise<string | null> {
+  const menuContext = menuItems && menuItems.length > 0
+    ? `\n\nAvailable menu items:\n${menuItems.map((m) => `- ${m.name} (${m.price})`).join("\n")}`
+    : "No menu available currently.";
+
+  const historyContext = recentHistory && recentHistory.length > 0
+    ? `\n\nRecent conversation:\n${recentHistory.map((m) => `${m.role === "customer" ? "Customer" : "You"}: ${m.text}`).join("\n")}`
+    : "";
+
+  const prompt = `You are a helpful and friendly AI assistant representing ${vendor.name} on WhatsApp.
+Your goal is to answer the customer's message naturally and conversationally.
+You should keep your answers short (1-3 sentences) since this is WhatsApp.
+You can answer questions about the menu, prices, and general inquiries.
+If the customer wants to order, politely instruct them to use the format: "order <item> <quantity>" or reply with a menu item number.
+Do not invent prices or items that are not on the menu.
+Prices are in ${vendor.currency}.
+
+${menuContext}
+${historyContext}
+
+Customer's latest message: ${text}
+
+Reply directly as the bot. No JSON, just the text response.`;
+
+  const content = await runLLM(prompt);
+  return content;
+}

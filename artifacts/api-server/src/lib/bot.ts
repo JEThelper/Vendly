@@ -19,7 +19,7 @@ import { and, eq, sql, desc, gte, inArray } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./whatsapp";
 import { logger } from "./logger";
 import { hasFeature } from "./plans";
-import { aiExtractOrder, aiExtractAdminIntent, type ExtractedAdminIntent } from "./ai-extractor";
+import { aiExtractOrder, aiExtractAdminIntent, generateChatResponse, type ExtractedAdminIntent } from "./ai-extractor";
 import {
   setPendingOrder,
   getPendingOrder,
@@ -1686,7 +1686,22 @@ async function computeBotReply(
     // AI fallback failed — continue to generic fallback
   }
 
-  // Fallback
+  // Fallback to conversational AI
+  try {
+    const aiChat = await generateChatResponse(
+      body,
+      vendor,
+      activeItems.map((item) => ({ name: item.name, price: item.price })),
+      conversationHistory,
+    );
+    if (aiChat) {
+      return { text: aiChat, handover: false };
+    }
+  } catch (err) {
+    logger.warn({ err }, "AI chat response failed");
+  }
+
+  // Generic fallback if AI fails
   return {
     text: [
       `I'm not quite sure what you mean! 🤔 Let me help:`,
