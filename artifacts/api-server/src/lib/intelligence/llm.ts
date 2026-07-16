@@ -20,7 +20,17 @@ const responseSchema = {
         type: SchemaType.OBJECT,
         properties: {
           tool_name: { type: SchemaType.STRING },
-          arguments: { type: SchemaType.OBJECT } // We rely on the model for now to populate it
+          arguments: { 
+            type: SchemaType.OBJECT,
+            properties: {
+              query: { type: SchemaType.STRING, description: "Search query for menu" },
+              item_id: { type: SchemaType.STRING, description: "ID of the menu item" },
+              quantity: { type: SchemaType.NUMBER, description: "Quantity to add or update" },
+              payment_method: { type: SchemaType.STRING, description: "cash or card" },
+              delivery_type: { type: SchemaType.STRING, description: "pickup or delivery" },
+              delivery_address: { type: SchemaType.STRING, description: "Address if delivery" }
+            }
+          }
         },
         required: ["tool_name", "arguments"]
       }
