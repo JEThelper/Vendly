@@ -27,25 +27,25 @@ async function tryDeterministicMatch(
   if (["👎", "❌"].includes(normalized)) normalized = "no";
 
   if (isAdmin) {
-    if (message === "orders") {
+    if (normalized === "orders") {
       const adminReply = await handleAdminCommand(vendor, "orders");
       if (adminReply) return { ...adminReply, ruleMatched: "admin_orders" };
       return null;
     }
-    if (message.startsWith("/promo list")) {
+    if (normalized.startsWith("/promo list")) {
       const promos = await db.select().from(promotionsTable).where(and(eq(promotionsTable.vendorId, vendor.id), eq(promotionsTable.active, true)));
       if (promos.length === 0) return { text: "No active promotions found.", ruleMatched: "admin_promo_list" };
       return { text: "Active Promos:\n" + promos.map(p => `- ${p.title}`).join("\n"), ruleMatched: "admin_promo_list" };
     }
-    if (message.startsWith("/bot on")) {
+    if (normalized.startsWith("/bot on")) {
       await db.update(vendorsTable).set({ botEnabled: true }).where(eq(vendorsTable.id, vendor.id));
       return { text: "Bot is now enabled for this vendor.", ruleMatched: "admin_bot_on" };
     }
-    if (message.startsWith("/bot off")) {
+    if (normalized.startsWith("/bot off")) {
       await db.update(vendorsTable).set({ botEnabled: false }).where(eq(vendorsTable.id, vendor.id));
       return { text: "Bot is now disabled for this vendor.", ruleMatched: "admin_bot_off" };
     }
-    if (message.startsWith("/admin")) {
+    if (normalized.startsWith("/admin") || normalized === "help" || normalized === "/help") {
       return {
         text: "Admin Commands:",
         buttons: [
@@ -57,31 +57,31 @@ async function tryDeterministicMatch(
         ruleMatched: "admin_help"
       };
     }
-    if (message.startsWith("/debug")) {
+    if (normalized.startsWith("/debug")) {
       return { text: "Debug info: " + vendor.id, ruleMatched: "admin_debug" };
     }
-    if (message.startsWith("/reset")) {
+    if (normalized.startsWith("/reset")) {
       await clearPendingOrder(vendor.id, customerPhone);
       return { text: "Cart and pending state cleared for your number.", ruleMatched: "admin_reset" };
     }
-    if (message.startsWith("confirm ") || ["confirm", "confirm order", "yes confirm"].includes(normalized)) {
-      if (message.startsWith("confirm ")) {
-        const adminReply = await handleAdminCommand(vendor, message);
+    if (normalized.startsWith("confirm ") || ["confirm", "confirm order", "yes confirm"].includes(normalized)) {
+      if (normalized.startsWith("confirm ")) {
+        const adminReply = await handleAdminCommand(vendor, normalized);
         if (adminReply) return { ...adminReply, ruleMatched: "admin_confirm" };
         return null;
       }
       return { text: "Please provide the order ID to confirm, e.g. confirm 1234", ruleMatched: "admin_confirm_missing_id" };
     }
-    if (message.startsWith("reject ") || ["reject", "reject order", "cancel order"].includes(normalized)) {
-      if (message.startsWith("reject ")) {
-        const adminReply = await handleAdminCommand(vendor, message);
+    if (normalized.startsWith("reject ") || ["reject", "reject order", "cancel order"].includes(normalized)) {
+      if (normalized.startsWith("reject ")) {
+        const adminReply = await handleAdminCommand(vendor, normalized);
         if (adminReply) return { ...adminReply, ruleMatched: "admin_reject" };
         return null;
       }
       return { text: "Please provide the order ID to reject, e.g. reject 1234", ruleMatched: "admin_reject_missing_id" };
     }
-    if (message.startsWith("eta ") || message.startsWith("paid ") || message.startsWith("not_paid ") || message.startsWith("ontheway ") || message.startsWith("delivered ")) {
-      const adminReply = await handleAdminCommand(vendor, message);
+    if (normalized.startsWith("eta ") || normalized.startsWith("paid ") || normalized.startsWith("not_paid ") || normalized.startsWith("ontheway ") || normalized.startsWith("delivered ")) {
+      const adminReply = await handleAdminCommand(vendor, normalized);
       if (adminReply) return { ...adminReply, ruleMatched: "admin_command" };
       return null;
     }
