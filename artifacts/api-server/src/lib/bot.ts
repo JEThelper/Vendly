@@ -1,4 +1,5 @@
 import { db } from "@workspace/db";
+import { menuCache } from "@workspace/db/src/cache";
 import {
   vendorsTable,
   type VendorRow,
@@ -81,7 +82,14 @@ function formatMoney(amount: number, currency: string): string {
 // customer in the menu and the *number* they reply with always line up.
 async function listActiveMenuItems(vendor: VendorRow): Promise<MenuItemRow[]> {
   return db
-    .select()
+    .select({
+      id: menuItemsTable.id,
+      name: menuItemsTable.name,
+      description: menuItemsTable.description,
+      price: menuItemsTable.price,
+      category: menuItemsTable.category,
+      available: menuItemsTable.available,
+    })
     .from(menuItemsTable)
     .where(
       and(
@@ -94,7 +102,12 @@ async function listActiveMenuItems(vendor: VendorRow): Promise<MenuItemRow[]> {
 
 async function listActivePromotions(vendor: VendorRow) {
   return db
-    .select()
+    .select({
+      id: promotionsTable.id,
+      title: promotionsTable.title,
+      description: promotionsTable.description,
+      active: promotionsTable.active,
+    })
     .from(promotionsTable)
     .where(
       and(
@@ -107,13 +120,11 @@ async function listActivePromotions(vendor: VendorRow) {
 }
 
 export async function buildMenuMessage(vendor: VendorRow): Promise<{ text: string; list?: NonNullable<BotReply["list"]> }> {
-  const items = await listActiveMenuItems(vendor);
+  const [items, promos] = await Promise.all([
+    listActiveMenuItems(vendor),
+    listActivePromotions(vendor),
+  ]);
 
-  if (items.length === 0) {
-    return { text: `Our menu is being updated. Please check back soon.` };
-  }
-
-  const promos = await listActivePromotions(vendor);
 
   const lines: string[] = [`*${vendor.name} — Menu*`, ""];
 
@@ -356,11 +367,29 @@ type OrderItem = {
 };
 
 async function listAllMenuItems(vendor: VendorRow): Promise<MenuItemRow[]> {
-  return db
-    .select()
+  // Return cached items if present for this vendor
+  const cached = menuCache.get(vendor.id);
+  if (cached) return cached;
+
+  // Fetch all menu items for the vendor and cache them
+  const items = await db
+    .select({
+      id: menuItemsTable.id,
+      vendorId: menuItemsTable.vendorId,
+      name: menuItemsTable.name,
+      description: menuItemsTable.description,
+      price: menuItemsTable.price,
+      category: menuItemsTable.category,
+      available: menuItemsTable.available,
+      createdAt: menuItemsTable.createdAt,
+      updatedAt: menuItemsTable.updatedAt,
+    })
     .from(menuItemsTable)
     .where(eq(menuItemsTable.vendorId, vendor.id))
     .orderBy(menuItemsTable.category, menuItemsTable.createdAt);
+
+  menuCache.set(vendor.id, items);
+  return items;
 }
 
 

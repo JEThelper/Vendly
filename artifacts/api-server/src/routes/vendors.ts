@@ -19,6 +19,7 @@ import {
   DeleteVendorParams,
 } from "@workspace/api-zod";
 import { toVendor } from "../lib/serializers";
+import { normalizePhone } from "../lib/phone";
 
 const router: IRouter = Router();
 router.use(requireApiKey);
@@ -40,7 +41,7 @@ router.post("/vendors", async (req, res) => {
       .values({
         name: data.name,
         phoneNumber: data.phoneNumber,
-        adminNumber: data.adminNumber ?? null,
+        adminNumber: data.adminNumber ? normalizePhone(data.adminNumber) : null,
         phoneNumberId: data.phoneNumberId ?? null,
         botNumber: data.botNumber ?? null,
         plan: data.plan,

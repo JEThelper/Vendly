@@ -9,27 +9,21 @@ const { Pool } = pg;
 // Use mock SQLite for dev/demo without real database
 const databaseUrl = process.env.DATABASE_URL || "better-sqlite3://:memory:";
 
-if (!process.env.DATABASE_URL && process.env.NODE_ENV !== "development") {
+if (process.env.NODE_ENV === "production" && !process.env.DATABASE_URL) {
   throw new Error(
     "DATABASE_URL must be set in production. Did you forget to provision a database?",
   );
 }
 
 // Production-grade connection pool configuration
-// These settings prevent connection exhaustion under load
-export const pool = new Pool({
+const pool = new Pool({
   connectionString: databaseUrl,
-  
-  // Connection pooling settings
-  max: parseInt(process.env.DB_POOL_SIZE || "20", 10),          // Max connections
-  min: parseInt(process.env.DB_POOL_MIN || "5", 10),             // Min idle connections
-  idleTimeoutMillis: 30000,      // Close idle connections after 30s
-  connectionTimeoutMillis: 5000, // Timeout for acquiring a connection
-  
-  // Retry settings for connection failures
-  maxUses: 0,                    // No limit on reuses (0 = unlimited)
+  max: Number(process.env.DB_POOL_SIZE) || 20,
+  min: Number(process.env.DB_POOL_MIN) || 5,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+  keepAlive: true,
 });
-
 // Log connection pool events in production
 if (process.env.NODE_ENV === "production") {
   pool.on("error", (err) => {

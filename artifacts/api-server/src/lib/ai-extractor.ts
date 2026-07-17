@@ -1,4 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+// Simple in‑memory cache for short LLM responses (e.g., static menu requests)
+const shortAnswerCache = new Map<string, string>();
 import Groq from "groq-sdk";
 import { logger } from "./logger";
 
@@ -39,7 +41,7 @@ function parseJsonResponse(content: string): unknown {
 
 async function runGemini(
   prompt: string,
-  timeoutMs = 10000,
+  timeoutMs = 12000,
 ): Promise<string | null> {
   const client = getGeminiClient();
   if (!client) {
@@ -91,7 +93,7 @@ function getGroqClient(): Groq | null {
 
 async function runGroq(
   prompt: string,
-  timeoutMs = 10000,
+  timeoutMs = 12000,
 ): Promise<string | null> {
   const client = getGroqClient();
   if (!client) {

@@ -114,7 +114,17 @@ export async function getPendingOrder(
 ): Promise<{ status: "found" | "expired" | "not_found"; order?: PendingOrder }> {
   try {
     const rows = await db
-      .select()
+      .select({
+        id: pendingOrdersTable.id,
+        vendorId: pendingOrdersTable.vendorId,
+        customerPhone: pendingOrdersTable.customerPhone,
+        menuItemId: pendingOrdersTable.menuItemId,
+        itemName: pendingOrdersTable.itemName,
+        quantity: pendingOrdersTable.quantity,
+        unitPrice: pendingOrdersTable.unitPrice,
+        total: pendingOrdersTable.total,
+        expiresAt: pendingOrdersTable.expiresAt,
+      })
       .from(pendingOrdersTable)
       .where(
         and(

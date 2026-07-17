@@ -50,6 +50,8 @@ export const ordersTable = pgTable("orders", {
     .on(table.vendorId, table.customerPhone),
   vendorCreatedIdx: index("vendor_created_idx")
     .on(table.vendorId, table.createdAt),
+  vendorCustomerStatusCreatedIdx: index("vendor_customer_status_created_idx")
+    .on(table.vendorId, table.customerPhone, table.status, table.createdAt),
 }));
 
 export type OrderRow = typeof ordersTable.$inferSelect;

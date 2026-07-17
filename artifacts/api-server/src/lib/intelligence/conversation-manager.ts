@@ -100,7 +100,17 @@ async function tryDeterministicMatch(
 
     const greetings = ["hi", "hello", "hey", "hiya", "hi there", "hello there", "morning", "good morning", "afternoon", "good afternoon", "evening", "good evening", "menu", "start", "hi please", "good day"];
     if (greetings.includes(normalized)) {
-      const activeUnpaidOrders = await db.select().from(ordersTable).where(and(eq(ordersTable.vendorId, vendor.id), eq(ordersTable.customerPhone, customerPhone), inArray(ordersTable.status, ["pending", "awaiting_payment", "payment_pending_confirmation", "confirmed"]))).orderBy(desc(ordersTable.createdAt));
+      const activeUnpaidOrders = await db
+      .select({ shortId: ordersTable.shortId })
+      .from(ordersTable)
+      .where(
+        and(
+          eq(ordersTable.vendorId, vendor.id),
+          eq(ordersTable.customerPhone, customerPhone),
+          inArray(ordersTable.status, ["pending", "awaiting_payment", "payment_pending_confirmation", "confirmed"]),
+        ),
+      )
+      .orderBy(desc(ordersTable.createdAt));
       
       if (activeUnpaidOrders.length > 0) {
         const order = activeUnpaidOrders[0];
@@ -203,7 +213,18 @@ async function tryDeterministicMatch(
 
     const paymentClaims = ["paid", "i've paid", "i have paid", "ive paid", "payment done", "payment made", "payment sent", "sent payment", "just paid", "money sent", "don pay", "i don pay", "i don send am", "i just send am", "transfer don enter", "don transfer"];
     if (paymentClaims.includes(normalized)) {
-      const [latestOrder] = await db.select().from(ordersTable).where(and(eq(ordersTable.vendorId, vendor.id), eq(ordersTable.customerPhone, customerPhone), eq(ordersTable.status, "confirmed"))).orderBy(desc(ordersTable.createdAt)).limit(1);
+      const [latestOrder] = await db
+        .select({ shortId: ordersTable.shortId, total: ordersTable.total, eta: ordersTable.eta })
+        .from(ordersTable)
+        .where(
+          and(
+            eq(ordersTable.vendorId, vendor.id),
+            eq(ordersTable.customerPhone, customerPhone),
+            eq(ordersTable.status, "confirmed"),
+          ),
+        )
+        .orderBy(desc(ordersTable.createdAt))
+        .limit(1);
       if (latestOrder) {
         if (vendor.adminNumber && vendor.phoneNumberId) {
           await queueOutboundMessage(
@@ -226,7 +247,17 @@ async function tryDeterministicMatch(
 
     const paymentDetailsReq = ["account details", "what's the account number again", "whats the account number again", "account number", "how to pay", "where to pay"];
     if (paymentDetailsReq.includes(normalized)) {
-       const activeOrders = await db.select().from(ordersTable).where(and(eq(ordersTable.vendorId, vendor.id), eq(ordersTable.customerPhone, customerPhone), eq(ordersTable.status, "awaiting_payment"))).orderBy(desc(ordersTable.createdAt));
+        const activeOrders = await db
+          .select({ total: ordersTable.total, shortId: ordersTable.shortId })
+          .from(ordersTable)
+          .where(
+            and(
+              eq(ordersTable.vendorId, vendor.id),
+              eq(ordersTable.customerPhone, customerPhone),
+              eq(ordersTable.status, "awaiting_payment"),
+            ),
+          )
+          .orderBy(desc(ordersTable.createdAt));
        if (activeOrders.length > 0) {
          return { text: paymentInstructions(vendor, Number(activeOrders[0].total)), ruleMatched: "customer_payment_instructions_resend" };
        }
@@ -234,7 +265,17 @@ async function tryDeterministicMatch(
 
     const tracking = ["track", "track order", "track my order", "where is my order", "wetin dey happen to my order", "my order status", "order status", "status", "wetin be the update", "any update"];
     if (tracking.includes(normalized)) {
-      const activeOrders = await db.select().from(ordersTable).where(and(eq(ordersTable.vendorId, vendor.id), eq(ordersTable.customerPhone, customerPhone), notInArray(ordersTable.status, ["delivered", "rejected", "cancelled"]))).orderBy(desc(ordersTable.createdAt));
+      const activeOrders = await db
+        .select({ shortId: ordersTable.shortId, status: ordersTable.status, total: ordersTable.total, eta: ordersTable.eta })
+        .from(ordersTable)
+        .where(
+          and(
+            eq(ordersTable.vendorId, vendor.id),
+            eq(ordersTable.customerPhone, customerPhone),
+            notInArray(ordersTable.status, ["delivered", "rejected", "cancelled"]),
+          ),
+        )
+        .orderBy(desc(ordersTable.createdAt));
       
       if (activeOrders.length === 0) {
         return { text: "You don't have an active order right now.", ruleMatched: "customer_order_tracking" };

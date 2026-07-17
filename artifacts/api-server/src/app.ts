@@ -3,6 +3,7 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import path from "path";
 import router from "./routes";
+import latencyMiddleware from "./middleware/latency";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
@@ -46,6 +47,7 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: true }));
+app.use(latencyMiddleware);
 
 app.use("/api", router);
 
