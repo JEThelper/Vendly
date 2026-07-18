@@ -204,6 +204,12 @@ toolRegistry.register("confirm_order", async (vendor, customerPhone, args: { pay
       ]);
     }
 
+    // Send acknowledgment to customer
+    if (vendor.phoneNumberId) {
+      const customerAck = `Your order #${order.shortId} has been placed and is pending vendor confirmation. You will be notified when the vendor confirms payment.`;
+      await queueOutboundMessage(vendor.phoneNumberId, customerPhone, customerAck);
+    }
+
     return { 
       success: true, 
       message: `Your order has been sent to ${vendor.name} for confirmation. You will be notified shortly!`, 
