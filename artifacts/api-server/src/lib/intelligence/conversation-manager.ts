@@ -211,7 +211,7 @@ async function tryDeterministicMatch(
       }
     }
 
-    const paymentClaims = ["paid", "i've paid", "i have paid", "ive paid", "payment done", "payment made", "payment sent", "sent payment", "just paid", "money sent", "don pay", "i don pay", "i don send am", "i just send am", "transfer don enter", "don transfer"];
+    const paymentClaims = ["paid", "done", "sent", "i've paid", "i have paid", "ive paid", "payment done", "payment made", "payment sent", "sent payment", "just paid", "money sent", "don pay", "i don pay", "i don send am", "i just send am", "transfer don enter", "don transfer"];
     if (paymentClaims.includes(normalized)) {
       const [latestOrder] = await db
         .select({ shortId: ordersTable.shortId, total: ordersTable.total, eta: ordersTable.eta })
@@ -220,7 +220,7 @@ async function tryDeterministicMatch(
           and(
             eq(ordersTable.vendorId, vendor.id),
             eq(ordersTable.customerPhone, customerPhone),
-            eq(ordersTable.status, "confirmed"),
+            inArray(ordersTable.status, ["awaiting_payment", "payment_pending_confirmation", "confirmed", "paid"]),
           ),
         )
         .orderBy(desc(ordersTable.createdAt))
@@ -238,10 +238,10 @@ async function tryDeterministicMatch(
             ],
             undefined,
             undefined,
-            incomingMessageId
           );
         }
-        return { text: "Thanks! We've notified the vendor. They will confirm your payment shortly.", ruleMatched: "customer_payment_claim" };
+        // Acknowledge customer payment claim
+        return { text: `We have received your payment claim for order #${latestOrder.shortId}. Our admin will verify shortly.`, ruleMatched: "customer_payment_claim" };
       }
     }
 
@@ -378,6 +378,23 @@ export class ConversationManager {
 
       const toolResults = await Promise.all(toolPromises).catch((err) => {
         logger.error({ err }, "Tool Execution Error");
+        // Fallback: ensure the customer receives a message even if a tool (including the LLM) fails
+        if (vendor.phoneNumberId) {
+          const fallback = "Sorry, I'm having trouble right now. Please try again in a moment.";
+          // Queue the fallback outbound message
+          queueOutboundMessage(
+            vendor.phoneNumberId,
+            customerPhone,
+            fallback,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            incomingMessageId,
+          );
+          // Record the fallback message in the database
+          recordMessage(conversation.id, "out", "bot", fallback);
+        }
         return [];
       });
 
@@ -412,18 +429,22 @@ export class ConversationManager {
     } catch (error: any) {
       logger.error({ errMessage: error?.message, stack: error?.stack, error }, "ConversationManager Error:");
       if (vendor.phoneNumberId) {
-        await queueOutboundMessage(
-          vendor.phoneNumberId, 
-          customerPhone, 
-          "I'm sorry, I'm having trouble processing your request right now. Please try again in a moment.",
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          incomingMessageId
-        );
-      }
-      return { text: "Error processing request." };
+          const fallbackMsg = "I'm sorry, I'm having trouble processing your request right now. Please try again in a moment.";
+          await queueOutboundMessage(
+            vendor.phoneNumberId,
+            customerPhone,
+            fallbackMsg,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            incomingMessageId
+          );
+          // Record the fallback outbound message so it appears in the messages table
+          const conversation = await findOrCreateConversation(vendor, customerPhone, "Customer");
+          await recordMessage(conversation.id, "out", "bot", fallbackMsg);
+        }
+        return { text: "Error processing request." };
     }
   }
 }
