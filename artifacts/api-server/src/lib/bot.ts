@@ -314,7 +314,11 @@ async function findLatestConfirmedOrder(vendorId: string): Promise<OrderRow | nu
     .where(
       and(
         eq(ordersTable.vendorId, vendorId),
-        eq(ordersTable.status, "confirmed"),
+        inArray(ordersTable.status, [
+          "awaiting_payment",
+          "payment_pending_confirmation",
+          "confirmed",
+        ]),
       ),
     )
     .orderBy(desc(ordersTable.createdAt))
@@ -522,7 +526,7 @@ async function buildPendingOrderState(
 
   let requests: ParsedItem[] = [];
   
-  const isPureNumbers = /^[\\d,\\s x×*]+$/i.test(body.trim()) && /\\d/.test(body.trim());
+  const isPureNumbers = /^[\d,\s x×*]+$/i.test(body.trim()) && /\d/.test(body.trim());
 
   if (isPureNumbers) {
     requests = parseOrderLine(body);

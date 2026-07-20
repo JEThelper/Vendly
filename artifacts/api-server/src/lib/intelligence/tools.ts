@@ -1,5 +1,5 @@
 import { Action } from "./types";
-import { VendorRow, db, menuItemsTable, ordersTable } from "@workspace/db";
+import { VendorRow, db, menuItemsTable, ordersTable, conversationsTable } from "@workspace/db";
 import { eq, and, ilike } from "drizzle-orm";
 import { logger } from "../logger";
 import { setPendingOrder, getPendingOrder, clearPendingOrder, PendingResolvedItem } from "../pending-orders";
@@ -146,6 +146,11 @@ toolRegistry.register("update_quantity", async (vendor, customerPhone, args: { i
 toolRegistry.register("confirm_order", async (vendor, customerPhone, args: { payment_method: string, delivery_type: string, delivery_address?: string, payment_type?: string }) => {
   const pending = await getPendingOrder(vendor.id, customerPhone);
   
+  // Retrieve customer name from conversation for proper admin notification
+  const conversation = await db.query.conversationsTable.findFirst({
+    where: and(eq(conversationsTable.vendorId, vendor.id), eq(conversationsTable.customerPhone, customerPhone)),
+  });
+  const customerName = conversation?.customerName || "Customer";
   if (!pending.order || pending.order.resolvedItems.length === 0) {
     return { success: false, message: "Cannot confirm order. Cart is empty." };
   }
@@ -166,7 +171,7 @@ toolRegistry.register("confirm_order", async (vendor, customerPhone, args: { pay
     .values({
       vendorId: vendor.id,
       customerPhone,
-      customerName: customerPhone, 
+      customerName: customerName,
       status: "pending",
       paymentStatus: "pending",
       paymentType: args.payment_type || args.payment_method || null,
@@ -188,7 +193,7 @@ toolRegistry.register("confirm_order", async (vendor, customerPhone, args: { pay
 
     // Notify Admin
     if (vendor.adminNumber && vendor.phoneNumberId) {
-      let adminMsg = `New Order #${order.shortId} from ${customerPhone}\n`;
+      let adminMsg = `New Order #${order.shortId} from ${order.customerName} (${customerPhone})\n`;
       adminMsg += `Payment: ${order.paymentType || "Not specified"}\n`;
       adminMsg += `Type: ${order.deliveryType}\n`;
       if (order.deliveryLocation) adminMsg += `Location: ${order.deliveryLocation}\n`;
