@@ -5,7 +5,7 @@ import { llmService } from "./llm";
 import { toolRegistry } from "./tools";
 import { logger } from "../logger";
 import { queueOutboundMessage } from "../queue";
-import { isAdminSender, handleAdminCommand, buildMenuMessage, recordMessage, findOrCreateConversation, paymentInstructions } from "../bot";
+import { isAdminSender, handleAdminCommand, buildMenuMessage, recordMessage, findOrCreateConversation, paymentInstructions, tryHandleOrderDeterministically, buildFallbackReply } from "../bot";
 import { getPendingOrder, clearPendingOrder, setPendingOrder } from "../pending-orders";
 import { ordersTable, vendorsTable, promotionsTable, conversationsTable } from "@workspace/db";
 import { eq, and, desc, inArray, notInArray } from "drizzle-orm";
@@ -355,15 +355,66 @@ export class ConversationManager {
         return deterministicMatch;
       }
 
+      // Fast path: messages that unambiguously resolve to cart items (plain
+      // numbers, clear item names/quantities) don't need an LLM round trip
+      // at all. This only fires for the clean case — anything ambiguous
+      // falls through to the LLM below.
+      if (!isAdmin) {
+        let orderMatch: { text: string } | null = null;
+        try {
+          orderMatch = await tryHandleOrderDeterministically(vendor, customerPhone, message);
+        } catch (err) {
+          logger.warn({ err }, "tryHandleOrderDeterministically failed, falling through to LLM");
+        }
+        if (orderMatch) {
+          logger.info({ phone: customerPhone, path: "order_engine" }, "Handled without LLM");
+          if (vendor.phoneNumberId) {
+            await queueOutboundMessage(
+              vendor.phoneNumberId,
+              customerPhone,
+              orderMatch.text,
+              undefined,
+              undefined,
+              undefined,
+              { receivedAt: receivedAt || Date.now(), llmDuration: 0, dbDuration: 0 },
+              incomingMessageId
+            );
+            await recordMessage(conversation.id, "out", "bot", orderMatch.text);
+          }
+          return { text: orderMatch.text };
+        }
+      }
+
       const memory = await loadContext(vendor, customerPhone, customerName);
       const systemPrompt = await buildSystemPrompt(vendor, memory);
 
       const llmStart = Date.now();
-      const response = await llmService.generate(systemPrompt, message, { vendorId: vendor.id });
+      let response;
+      try {
+        response = await llmService.generate(systemPrompt, message, { vendorId: vendor.id });
+      } catch (err) {
+        logger.error({ err }, "LLM generation threw");
+        response = null;
+      }
       const llmDuration = Date.now() - llmStart;
 
       if (!response) {
-        throw new Error("Failed to generate LLM response.");
+        logger.warn({ phone: customerPhone, path: "llm_fallback" }, "LLM unavailable, using deterministic fallback");
+        const fallback = await buildFallbackReply(vendor, customerPhone, message);
+        if (vendor.phoneNumberId) {
+          await queueOutboundMessage(
+            vendor.phoneNumberId,
+            customerPhone,
+            fallback.text,
+            undefined,
+            undefined,
+            fallback.list,
+            { receivedAt: receivedAt || Date.now(), llmDuration, dbDuration: 0 },
+            incomingMessageId
+          );
+          await recordMessage(conversation.id, "out", "bot", fallback.text);
+        }
+        return { text: fallback.text, list: fallback.list };
       }
 
       logger.info({ phone: customerPhone, path: "llm" }, "Handled via LLM");
@@ -428,23 +479,26 @@ export class ConversationManager {
       return { text: response.assistant_response, buttons: finalButtons, list: finalList };
     } catch (error: any) {
       logger.error({ errMessage: error?.message, stack: error?.stack, error }, "ConversationManager Error:");
+      const conversation = await findOrCreateConversation(vendor, customerPhone, customerName || "Customer");
+      const fallback = await buildFallbackReply(vendor, customerPhone, message).catch(() => ({
+        text: "I'm sorry, I'm having trouble processing your request right now. Please try again in a moment.",
+        list: undefined as any,
+      }));
       if (vendor.phoneNumberId) {
-          const fallbackMsg = "I'm sorry, I'm having trouble processing your request right now. Please try again in a moment.";
           await queueOutboundMessage(
             vendor.phoneNumberId,
             customerPhone,
-            fallbackMsg,
+            fallback.text,
             undefined,
             undefined,
-            undefined,
+            fallback.list,
             undefined,
             incomingMessageId
           );
           // Record the fallback outbound message so it appears in the messages table
-          const conversation = await findOrCreateConversation(vendor, customerPhone, "Customer");
-          await recordMessage(conversation.id, "out", "bot", fallbackMsg);
+          await recordMessage(conversation.id, "out", "bot", fallback.text);
         }
-        return { text: "Error processing request." };
+        return { text: fallback.text, list: fallback.list };
     }
   }
 }
